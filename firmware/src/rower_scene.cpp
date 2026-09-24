@@ -5,27 +5,37 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
+#include <cstdlib>
 #include <cstring>
-#include <vector>
+#ifdef ESP_PLATFORM
+#include "esp_heap_caps.h"
+#endif
 
 namespace rower_scene {
 
 namespace {
 
-LGFX_Sprite* g_canvas = nullptr;
+// Frames are drawn at kSS× resolution into one scratch sprite, then box-
+// filtered down to kWidth×kHeight with ordered dithering. That gives every
+// edge (triangles and ellipses included, which LGFX doesn't anti-alias) a
+// smooth ramp and hides RGB565 banding in the sky/water gradients, at a
+// boot-time-only cost. The sprite is freed by releaseCanvas() once the
+// frame set is precomputed.
+constexpr int kSS = 2;
+constexpr int kCW = kWidth * kSS;
+constexpr int kCH = kHeight * kSS;
 
-constexpr float kCamZ = -0.95f;
-constexpr float kCamY = 0.98f;
 constexpr float kPi = 3.14159265f;
 constexpr float kTau = kPi * 2.0f;
 
-struct RGB565 {
-    uint16_t v;
-};
+LGFX_Sprite* g_canvas = nullptr;
+// Sky + water gradient are identical in every frame: rendered once, then
+// copied in as the starting point of each frame.
+uint16_t* g_background = nullptr;
 
-RGB565 color565(LGFX_Sprite* c, uint8_t r, uint8_t g, uint8_t b) {
-    return RGB565{c->color565(r, g, b)};
-}
+// ---------------------------------------------------------------------------
+// Small math/color helpers
 
 float lerp(float a, float b, float t) {
     return a + (b - a) * t;
@@ -35,47 +45,629 @@ float clamp01(float t) {
     return t < 0.0f ? 0.0f : (t > 1.0f ? 1.0f : t);
 }
 
-uint16_t lerpColor565(LGFX_Sprite* c, uint16_t c0, uint16_t c1, float t) {
-    t = clamp01(t);
-    const int r0 = (c0 >> 11) & 31;
-    const int g0 = (c0 >> 5) & 63;
-    const int b0 = c0 & 31;
-    const int r1 = (c1 >> 11) & 31;
-    const int g1 = (c1 >> 5) & 63;
-    const int b1 = c1 & 31;
-    const int r = static_cast<int>(lerp(static_cast<float>(r0), static_cast<float>(r1), t));
-    const int g = static_cast<int>(lerp(static_cast<float>(g0), static_cast<float>(g1), t));
-    const int b = static_cast<int>(lerp(static_cast<float>(b0), static_cast<float>(b1), t));
-    return c->color565(static_cast<uint8_t>(r << 3), static_cast<uint8_t>(g << 2), static_cast<uint8_t>(b << 3));
+float smoothstep(float e0, float e1, float x) {
+    const float t = clamp01((x - e0) / (e1 - e0));
+    return t * t * (3.0f - 2.0f * t);
 }
 
-struct Camera {
-    int w = kWidth;
-    int h = kHeight;
-    float focal = 280.0f;
-    float horizon = 28.0f;
+float hash01(int i) {
+    const float s = std::sin(static_cast<float>(i) * 12.9898f + 78.233f) * 43758.5453f;
+    return s - std::floor(s);
+}
 
-    void project(float x, float y, float z, float& sx, float& sy, float& ppm) const {
-        float zc = z - kCamZ;
-        if (zc < 0.32f) {
-            zc = 0.32f;
-        }
-        ppm = focal / zc;
-        sx = w * 0.5f + x * ppm;
-        sy = horizon + (kCamY - y) * ppm;
-    }
+struct Rgb {
+    float r;
+    float g;
+    float b;
 };
 
-struct Vec2 {
-    float x;
-    float y;
-};
+constexpr Rgb rgb(uint32_t hex) {
+    return {static_cast<float>((hex >> 16) & 0xFF), static_cast<float>((hex >> 8) & 0xFF), static_cast<float>(hex & 0xFF)};
+}
+
+Rgb mix(Rgb a, Rgb b, float t) {
+    t = clamp01(t);
+    return {lerp(a.r, b.r, t), lerp(a.g, b.g, t), lerp(a.b, b.b, t)};
+}
+
+uint16_t pack(Rgb c) {
+    const auto ch = [](float v) { return static_cast<uint32_t>(v < 0.0f ? 0.0f : (v > 255.0f ? 255.0f : v)); };
+    return static_cast<uint16_t>(((ch(c.r) & 0xF8) << 8) | ((ch(c.g) & 0xFC) << 3) | (ch(c.b) >> 3));
+}
+
+// Palette: dusk scene that sits under the dark UI (see panel_runtime colors).
+constexpr Rgb kSkyTop = rgb(0x070B14);
+constexpr Rgb kSkyMid = rgb(0x1A2F45);
+constexpr Rgb kSkyGlow = rgb(0x6A5A5A);
+constexpr Rgb kSun = rgb(0xFFE3A8);
+constexpr Rgb kHillFar = rgb(0x1F3346);
+constexpr Rgb kHillNear = rgb(0x122130);
+constexpr Rgb kTreeLine = rgb(0x0B1620);
+constexpr Rgb kWaterHorizon = rgb(0x3A5A6E);
+constexpr Rgb kWaterMid = rgb(0x173A4C);
+constexpr Rgb kWaterDeep = rgb(0x06131C);
+constexpr Rgb kRipple = rgb(0x8FC3D6);
+constexpr Rgb kFoam = rgb(0xE6F4F8);
+constexpr Rgb kHullLit = rgb(0xF4F7FA);
+constexpr Rgb kHullShade = rgb(0xAEBAC6);
+constexpr Rgb kHullDark = rgb(0x6F7D8A);
+constexpr Rgb kCockpit = rgb(0x26313C);
+constexpr Rgb kAccent = rgb(0x3DE8B8);
+constexpr Rgb kMetal = rgb(0x55616D);
+constexpr Rgb kShaft = rgb(0xE9EDF1);
+constexpr Rgb kShaftShade = rgb(0xB3BCC5);
+constexpr Rgb kGrip = rgb(0x2A2F36);
+constexpr Rgb kKit = rgb(0x1C3A4E);
+constexpr Rgb kKitShade = rgb(0x12283A);
+constexpr Rgb kSkin = rgb(0xE2B48C);
+constexpr Rgb kSkinShade = rgb(0xB58563);
+constexpr Rgb kHair = rgb(0x221812);
+constexpr Rgb kSeat = rgb(0x3A4450);
+
+// ---------------------------------------------------------------------------
+// Camera: sits behind and above the stern, looking toward the bow (+Z).
+// Units are metres; y=0 is the waterline. All screen values are canvas
+// pixels (already kSS-scaled).
 
 struct Vec3 {
     float x;
     float y;
     float z;
 };
+
+Vec3 operator+(Vec3 a, Vec3 b) {
+    return {a.x + b.x, a.y + b.y, a.z + b.z};
+}
+
+Vec3 operator-(Vec3 a, Vec3 b) {
+    return {a.x - b.x, a.y - b.y, a.z - b.z};
+}
+
+Vec3 operator*(Vec3 a, float s) {
+    return {a.x * s, a.y * s, a.z * s};
+}
+
+Vec3 vlerp(Vec3 a, Vec3 b, float t) {
+    return {lerp(a.x, b.x, t), lerp(a.y, b.y, t), lerp(a.z, b.z, t)};
+}
+
+struct Pt {
+    float x;
+    float y;
+};
+
+struct Camera {
+    float camZ = -2.1f;
+    float camY = 1.7f;
+    float focal = 300.0f * kSS;
+    float horizon = 58.0f * kSS;
+
+    Pt project(Vec3 p, float* ppmOut = nullptr) const {
+        float zc = p.z - camZ;
+        if (zc < 0.3f) {
+            zc = 0.3f;
+        }
+        const float ppm = focal / zc;
+        if (ppmOut != nullptr) {
+            *ppmOut = ppm;
+        }
+        return {kCW * 0.5f + p.x * ppm, horizon + (camY - p.y) * ppm};
+    }
+
+    float ppmAt(float z) const {
+        const float zc = std::max(z - camZ, 0.3f);
+        return focal / zc;
+    }
+};
+
+// ---------------------------------------------------------------------------
+// Primitive wrappers (all coordinates in canvas pixels)
+
+uint16_t* pixels() {
+    return static_cast<uint16_t*>(g_canvas->getBuffer());
+}
+
+// Two-tone 2×2 checker between the two nearest RGB565 values, so the
+// downsample recovers sub-LSB gradient steps instead of hard bands.
+void ditherRow(int y, int x0, int x1, Rgb c) {
+    if (y < 0 || y >= kCH) {
+        return;
+    }
+    x0 = std::max(x0, 0);
+    x1 = std::min(x1, kCW);
+    const float r5 = clamp01(c.r / 255.0f) * 31.0f;
+    const float g6 = clamp01(c.g / 255.0f) * 63.0f;
+    const float b5 = clamp01(c.b / 255.0f) * 31.0f;
+    // Thresholds for the 4 positions of a 2x2 Bayer cell.
+    static const float kBayer[2][2] = {{0.125f, 0.625f}, {0.875f, 0.375f}};
+    uint16_t* row = pixels() + static_cast<size_t>(y) * kCW;
+    for (int x = x0; x < x1; x++) {
+        const float th = kBayer[y & 1][x & 1];
+        const uint16_t r = static_cast<uint16_t>(std::min(31.0f, std::floor(r5 + th)));
+        const uint16_t g = static_cast<uint16_t>(std::min(63.0f, std::floor(g6 + th)));
+        const uint16_t b = static_cast<uint16_t>(std::min(31.0f, std::floor(b5 + th)));
+        row[x] = static_cast<uint16_t>((r << 11) | (g << 5) | b);
+    }
+}
+
+void blendPixel(int x, int y, Rgb c, float a) {
+    if (x < 0 || y < 0 || x >= kCW || y >= kCH || a <= 0.0f) {
+        return;
+    }
+    uint16_t& d = pixels()[static_cast<size_t>(y) * kCW + x];
+    const Rgb dst = {static_cast<float>((d >> 11) & 31) * (255.0f / 31.0f), static_cast<float>((d >> 5) & 63) * (255.0f / 63.0f),
+                     static_cast<float>(d & 31) * (255.0f / 31.0f)};
+    d = pack(mix(dst, c, a));
+}
+
+// Anti-aliased horizontal stroke `width` px tall centred on y. Much cheaper
+// than drawWideLine for the hundreds of ripple/glint strokes per frame.
+void hstroke(float x0, float x1, float y, float width, Rgb col, float alpha) {
+    const float top = y - width * 0.5f;
+    const float bot = y + width * 0.5f;
+    const int xs = static_cast<int>(std::floor(x0));
+    const int xe = static_cast<int>(std::ceil(x1));
+    for (int yi = static_cast<int>(std::floor(top)); yi < bot; yi++) {
+        const float vcov = std::min(bot, static_cast<float>(yi + 1)) - std::max(top, static_cast<float>(yi));
+        if (vcov <= 0.0f) {
+            continue;
+        }
+        for (int x = xs; x < xe; x++) {
+            const float hcov = std::min(x1, static_cast<float>(x + 1)) - std::max(x0, static_cast<float>(x));
+            blendPixel(x, yi, col, alpha * vcov * clamp01(hcov));
+        }
+    }
+}
+
+void tri(Pt a, Pt b, Pt c, Rgb col) {
+    g_canvas->fillTriangle(
+        static_cast<int32_t>(std::lround(a.x)), static_cast<int32_t>(std::lround(a.y)), static_cast<int32_t>(std::lround(b.x)),
+        static_cast<int32_t>(std::lround(b.y)), static_cast<int32_t>(std::lround(c.x)), static_cast<int32_t>(std::lround(c.y)), pack(col)
+    );
+}
+
+// Convex polygon only (fan triangulation).
+void convex(const Pt* pts, int n, Rgb col) {
+    for (int i = 1; i + 1 < n; i++) {
+        tri(pts[0], pts[i], pts[i + 1], col);
+    }
+}
+
+void convex3(const Camera& cam, const Vec3* pts, int n, Rgb col) {
+    Pt proj[12];
+    n = std::min(n, 12);
+    for (int i = 0; i < n; i++) {
+        proj[i] = cam.project(pts[i]);
+    }
+    convex(proj, n, col);
+}
+
+// Anti-aliased capsule; `radius` in canvas pixels.
+void capsule(Pt a, Pt b, float radius, Rgb col) {
+    g_canvas->drawWideLine(
+        static_cast<int32_t>(std::lround(a.x)), static_cast<int32_t>(std::lround(a.y)), static_cast<int32_t>(std::lround(b.x)),
+        static_cast<int32_t>(std::lround(b.y)), std::max(radius, 0.6f), pack(col)
+    );
+}
+
+// 3D capsule; `radiusM` in metres, scaled by perspective at each end.
+void limb(const Camera& cam, Vec3 a, Vec3 b, float radiusM, Rgb col) {
+    float ppmA = 0.0f;
+    float ppmB = 0.0f;
+    const Pt pa = cam.project(a, &ppmA);
+    const Pt pb = cam.project(b, &ppmB);
+    capsule(pa, pb, 0.5f * (ppmA + ppmB) * radiusM, col);
+}
+
+void ellipse(Pt c, float rx, float ry, Rgb col) {
+    if (rx < 0.5f || ry < 0.5f) {
+        return;
+    }
+    g_canvas->fillEllipse(
+        static_cast<int32_t>(std::lround(c.x)), static_cast<int32_t>(std::lround(c.y)), static_cast<int32_t>(std::lround(rx)),
+        static_cast<int32_t>(std::lround(ry)), pack(col)
+    );
+}
+
+void ball(const Camera& cam, Vec3 c, float rxM, float ryM, Rgb col) {
+    float ppm = 0.0f;
+    const Pt p = cam.project(c, &ppm);
+    ellipse(p, rxM * ppm, ryM * ppm, col);
+}
+
+// Fills everything below the curve top(x) down to `bottom`, with an
+// anti-aliased top edge. Used for hill silhouettes.
+template <typename F>
+void fillBelowCurve(F top, int bottom, Rgb col) {
+    const uint16_t c = pack(col);
+    for (int x = 0; x < kCW; x++) {
+        const float y = top(static_cast<float>(x));
+        const int yi = static_cast<int>(std::floor(y));
+        blendPixel(x, yi, col, 1.0f - (y - static_cast<float>(yi)));
+        if (bottom > yi + 1) {
+            g_canvas->drawFastVLine(x, yi + 1, bottom - yi - 1, c);
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Scene layers
+
+void drawSky(const Camera& cam) {
+    const int horizon = static_cast<int>(cam.horizon);
+    for (int y = 0; y < horizon; y++) {
+        const float t = static_cast<float>(y) / static_cast<float>(horizon);
+        const Rgb c = t < 0.6f ? mix(kSkyTop, kSkyMid, t / 0.6f) : mix(kSkyMid, kSkyGlow, (t - 0.6f) / 0.4f);
+        ditherRow(y, 0, kCW, c);
+    }
+
+    // Low sun with a soft halo, left of the boat so the rower is back-lit
+    // from the side (matches the lit/shaded limb colors below).
+    const Pt sun = {kCW * 0.24f, cam.horizon - 20.0f * kSS};
+    const float glowR = 42.0f * kSS;
+    for (int y = static_cast<int>(sun.y - glowR); y <= static_cast<int>(sun.y + glowR); y++) {
+        for (int x = static_cast<int>(sun.x - glowR); x <= static_cast<int>(sun.x + glowR); x++) {
+            const float d = std::hypot(static_cast<float>(x) - sun.x, static_cast<float>(y) - sun.y) / glowR;
+            if (d < 1.0f) {
+                blendPixel(x, y, kSun, 0.30f * (1.0f - d) * (1.0f - d));
+            }
+        }
+    }
+    ellipse(sun, 7.0f * kSS, 7.0f * kSS, kSun);
+
+    // Two hill layers plus a ragged tree line right on the horizon.
+    const float h = cam.horizon;
+    fillBelowCurve(
+        [&](float x) {
+            const float u = x / kCW;
+            return h - kSS * (13.0f + 9.0f * std::sin(u * 5.1f + 0.4f) + 4.0f * std::sin(u * 13.0f + 1.3f));
+        },
+        horizon, kHillFar
+    );
+    fillBelowCurve(
+        [&](float x) {
+            const float u = x / kCW;
+            return h - kSS * (6.0f + 5.0f * std::sin(u * 7.3f + 2.2f) + 2.0f * std::sin(u * 21.0f));
+        },
+        horizon, kHillNear
+    );
+    fillBelowCurve(
+        [&](float x) {
+            const float u = x / kCW;
+            const float jag = std::fabs(std::sin(u * 157.0f)) * 1.6f + std::fabs(std::sin(u * 61.0f + 0.7f)) * 1.2f;
+            return h - kSS * (1.2f + jag);
+        },
+        horizon, kTreeLine
+    );
+}
+
+Rgb waterColorAt(const Camera& cam, float y) {
+    const float u = clamp01((y - cam.horizon) / (static_cast<float>(kCH) - cam.horizon));
+    return u < 0.25f ? mix(kWaterHorizon, kWaterMid, u / 0.25f) : mix(kWaterMid, kWaterDeep, (u - 0.25f) / 0.75f);
+}
+
+void drawWaterBase(const Camera& cam) {
+    const int horizon = static_cast<int>(cam.horizon);
+    for (int y = horizon; y < kCH; y++) {
+        ditherRow(y, 0, kCW, waterColorAt(cam, static_cast<float>(y)));
+    }
+}
+
+void drawWaterDetail(const Camera& cam, float t) {
+    // Sun path: broken glints on the water below the sun.
+    const float sunX = kCW * 0.24f;
+    for (int i = 0; i < 18; i++) {
+        const float z = 2.5f + 22.0f * std::pow(static_cast<float>(i) / 18.0f, 1.6f);
+        float ppm = 0.0f;
+        const Pt p = cam.project({0.0f, 0.0f, z}, &ppm);
+        const float wob = std::sin(t * kTau + static_cast<float>(i) * 1.7f);
+        const float halfLen = (0.35f + 0.25f * hash01(i + 300)) * ppm * (0.6f + 0.4f * wob);
+        const float x = sunX + (hash01(i + 500) - 0.5f) * 0.5f * ppm;
+        const float fade = 1.0f - static_cast<float>(i) / 30.0f;
+        if (halfLen > 1.0f) {
+            hstroke(x - halfLen, x + halfLen, p.y, 1.4f * kSS, kSun, 0.45f * fade);
+        }
+    }
+
+    // Ripple crests: short strokes spread evenly over the screen rows (so
+    // perspective thins them out naturally with distance). Each one only
+    // shimmers in place with its own phase - no translation - so every
+    // frame count loops seamlessly and there is no repeating tile pattern.
+    constexpr int kRipples = 340;
+    for (int i = 0; i < kRipples; i++) {
+        const float sy = cam.horizon + 3.0f * kSS + hash01(i * 4 + 1) * (static_cast<float>(kCH) - cam.horizon);
+        const float ppm = (sy - cam.horizon) / cam.camY;
+        const float sx = hash01(i * 4 + 2) * kCW;
+        const float phase = hash01(i * 4 + 3) * kTau;
+        const float a = 0.5f + 0.5f * std::sin(t * kTau + phase);
+        const float drift = 0.04f * ppm * std::sin(t * kTau + phase * 1.7f);
+        const float halfLen = (0.08f + 0.20f * hash01(i * 4 + 4)) * ppm * (0.55f + 0.45f * a);
+        const float width = std::max(1.0f, 0.020f * ppm);
+        hstroke(sx + drift - halfLen, sx + drift + halfLen, sy, width, kRipple, 0.10f + 0.32f * a);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Boat
+
+float hullHalfBeam(float z) {
+    // Stern at z=0 (towards the camera), bow at z=8.
+    const float u = clamp01(z / 8.0f);
+    if (u < 0.3f) {
+        return lerp(0.10f, 0.23f, std::sin(u / 0.3f * kPi * 0.5f));
+    }
+    return lerp(0.23f, 0.015f, std::pow((u - 0.3f) / 0.7f, 0.8f));
+}
+
+constexpr float kDeckY = 0.12f;
+
+void drawHullShadow(const Camera& cam) {
+    // Dark reflection / shadow on the water, slightly wider than the hull.
+    constexpr int kN = 14;
+    for (int i = 0; i + 1 < kN; i++) {
+        const float z0 = static_cast<float>(i) * 8.0f / (kN - 1);
+        const float z1 = static_cast<float>(i + 1) * 8.0f / (kN - 1);
+        const float w0 = hullHalfBeam(z0) * 1.55f;
+        const float w1 = hullHalfBeam(z1) * 1.55f;
+        const Vec3 q[4] = {{-w0, 0.0f, z0}, {w0, 0.0f, z0}, {w1, 0.0f, z1}, {-w1, 0.0f, z1}};
+        convex3(cam, q, 4, mix(kWaterMid, kWaterDeep, 0.75f));
+    }
+}
+
+void drawHull(const Camera& cam, float t) {
+    constexpr int kN = 24;
+    for (int i = kN - 2; i >= 0; i--) {
+        const float z0 = static_cast<float>(i) * 8.0f / (kN - 1);
+        const float z1 = static_cast<float>(i + 1) * 8.0f / (kN - 1);
+        const float w0 = hullHalfBeam(z0);
+        const float w1 = hullHalfBeam(z1);
+        // Sides (left lit by the sun, right in shade), then the deck.
+        const Vec3 left[4] = {{-w0, 0.0f, z0}, {-w0 * 0.92f, kDeckY, z0}, {-w1 * 0.92f, kDeckY, z1}, {-w1, 0.0f, z1}};
+        const Vec3 right[4] = {{w0, 0.0f, z0}, {w0 * 0.92f, kDeckY, z0}, {w1 * 0.92f, kDeckY, z1}, {w1, 0.0f, z1}};
+        const Vec3 deck[4] = {{-w0 * 0.92f, kDeckY, z0}, {w0 * 0.92f, kDeckY, z0}, {w1 * 0.92f, kDeckY, z1}, {-w1 * 0.92f, kDeckY, z1}};
+        convex3(cam, left, 4, kHullShade);
+        convex3(cam, right, 4, kHullDark);
+        convex3(cam, deck, 4, kHullLit);
+    }
+
+    // Waterline foam along both sides, flickering with the water phase.
+    for (int side = -1; side <= 1; side += 2) {
+        for (int i = 0; i < 18; i++) {
+            const float z0 = 0.2f + static_cast<float>(i) * 0.42f;
+            const float z1 = z0 + 0.28f;
+            const float a = 0.5f + 0.5f * std::sin(t * kTau * 2.0f + static_cast<float>(i) * 1.3f + side);
+            limb(cam, {side * hullHalfBeam(z0) * 1.04f, 0.005f, z0}, {side * hullHalfBeam(z1) * 1.04f, 0.005f, z1}, 0.012f,
+                 mix(kWaterMid, kFoam, 0.35f + 0.4f * a));
+        }
+    }
+
+    // Accent pin-stripes along the gunwales and the open cockpit.
+    limb(cam, {-hullHalfBeam(0.3f) * 0.9f, kDeckY + 0.002f, 0.3f}, {-hullHalfBeam(6.5f) * 0.9f, kDeckY + 0.002f, 6.5f}, 0.008f, kAccent);
+    limb(cam, {hullHalfBeam(0.3f) * 0.9f, kDeckY + 0.002f, 0.3f}, {hullHalfBeam(6.5f) * 0.9f, kDeckY + 0.002f, 6.5f}, 0.008f, kAccent);
+    const Vec3 cockpit[4] = {{-0.15f, kDeckY + 0.003f, 0.95f}, {0.15f, kDeckY + 0.003f, 0.95f}, {0.13f, kDeckY + 0.003f, 2.55f},
+                             {-0.13f, kDeckY + 0.003f, 2.55f}};
+    convex3(cam, cockpit, 4, kCockpit);
+    // Slide rails.
+    limb(cam, {-0.07f, kDeckY + 0.02f, 1.0f}, {-0.07f, kDeckY + 0.02f, 2.1f}, 0.012f, kMetal);
+    limb(cam, {0.07f, kDeckY + 0.02f, 1.0f}, {0.07f, kDeckY + 0.02f, 2.1f}, 0.012f, kMetal);
+}
+
+// ---------------------------------------------------------------------------
+// Rower + oars. Stylised to match the stock console: seen from behind, the
+// rower faces the bow (+Z). drive: 0 = catch (compressed, reaching forward),
+// 1 = finish (legs flat, leaning back, handles at the ribs).
+
+struct Pose {
+    float seatZ;
+    Vec3 hip;
+    Vec3 knee[2];
+    Vec3 foot[2];
+    Vec3 shoulderC;
+    Vec3 shoulder[2];
+    Vec3 head;
+    Vec3 elbow[2];
+    Vec3 hand[2];
+    Vec3 lock[2];
+    Vec3 blade[2];
+    Vec3 bladeDir[2];
+    bool bladeInWater;
+};
+
+constexpr float kFootZ = 2.30f;
+constexpr float kFootY = 0.20f;
+constexpr float kThigh = 0.46f;
+constexpr float kShin = 0.46f;
+constexpr float kTorso = 0.58f;
+constexpr float kLockZ = 1.95f;
+constexpr float kLockX = 0.80f;
+constexpr float kOutboard = 1.55f;
+
+// Knee position by two-bone IK in the y/z plane, bending upward.
+Vec3 kneeFor(Vec3 hip, Vec3 foot) {
+    const float dz = foot.z - hip.z;
+    const float dy = foot.y - hip.y;
+    const float d = std::sqrt(dz * dz + dy * dy);
+    const float half = std::min(d * 0.5f, kThigh * 0.999f);
+    const float up = std::sqrt(std::max(kThigh * kThigh - half * half, 0.0f));
+    // Perpendicular to hip->foot, pointing up.
+    const float nz = -dy / d;
+    const float ny = dz / d;
+    return {lerp(hip.x, foot.x, 0.5f), hip.y + dy * 0.5f + ny * up, hip.z + dz * 0.5f + nz * up};
+}
+
+Pose solvePose(float drive, bool recovering) {
+    // Stroke sequencing: legs, then body swing, then arms (reversed on the
+    // recovery simply by running drive back from 1 to 0).
+    const float legs = smoothstep(0.0f, 0.6f, drive);
+    const float body = smoothstep(0.25f, 0.8f, drive);
+    const float arms = smoothstep(0.55f, 1.0f, drive);
+
+    Pose p{};
+    p.seatZ = lerp(kFootZ - 0.44f, kFootZ - 0.90f, legs);
+    p.hip = {0.0f, 0.34f, p.seatZ};
+    for (int s = 0; s < 2; s++) {
+        const float side = s == 0 ? -1.0f : 1.0f;
+        p.foot[s] = {side * 0.12f, kFootY, kFootZ};
+        p.knee[s] = kneeFor({side * 0.11f, p.hip.y, p.hip.z}, p.foot[s]);
+        p.knee[s].x = side * 0.13f;
+    }
+
+    const float lean = lerp(0.45f, -0.35f, body);  // radians, + = toward bow
+    const Vec3 up = {0.0f, std::cos(lean), std::sin(lean)};
+    p.shoulderC = p.hip + up * kTorso;
+    p.head = p.shoulderC + up * 0.22f;
+
+    const Vec3 reachStraight = {0.0f, -0.20f, 0.60f};
+    const Vec3 reachBent = {0.0f, -0.26f, 0.18f};
+    const Vec3 reach = vlerp(reachStraight, reachBent, arms);
+    for (int s = 0; s < 2; s++) {
+        const float side = s == 0 ? -1.0f : 1.0f;
+        p.shoulder[s] = p.shoulderC + Vec3{side * 0.23f, -0.03f, 0.0f};
+        // Sculling grips overlap slightly; the left hand leads a touch.
+        p.hand[s] = p.shoulderC + reach + Vec3{side * 0.11f, s == 0 ? 0.015f : -0.015f, s == 0 ? 0.03f : 0.0f};
+        const Vec3 mid = vlerp(p.shoulder[s], p.hand[s], 0.5f);
+        p.elbow[s] = mid + Vec3{side * (0.05f + 0.10f * arms), -0.06f * arms, -0.14f * arms};
+
+        // Oar is straight through the gate: blade direction = handle->lock.
+        // The gate height follows the same straight line, so the shaft
+        // never shows a kink at the rigger.
+        float dx = side * kLockX - p.hand[s].x;
+        float dz = kLockZ - p.hand[s].z;
+        const float inboard = std::sqrt(dx * dx + dz * dz);
+        dx /= inboard;
+        dz /= inboard;
+        const float bladeY = recovering ? lerp(0.10f, 0.26f, std::sin(drive * kPi)) : -0.02f;
+        const float gateY = lerp(p.hand[s].y, bladeY, inboard / (inboard + kOutboard));
+        p.lock[s] = {side * kLockX, gateY, kLockZ};
+        p.bladeDir[s] = {dx, (bladeY - p.hand[s].y) / (inboard + kOutboard), dz};
+        p.blade[s] = {p.lock[s].x + dx * kOutboard, bladeY, p.lock[s].z + dz * kOutboard};
+    }
+    p.bladeInWater = !recovering;
+    return p;
+}
+
+void drawOar(const Camera& cam, const Pose& p, int s, float t) {
+    const float side = s == 0 ? -1.0f : 1.0f;
+    const Rgb shaft = s == 0 ? kShaft : kShaftShade;
+    const Vec3 dir = p.bladeDir[s];
+    const Vec3 across = {-dir.z, 0.0f, dir.x};  // horizontal, perpendicular to shaft
+    const Vec3 flat = {dir.x, 0.0f, dir.z};     // shaft direction, level
+
+    // Rigger: two struts from the gunwale to the gate.
+    limb(cam, {side * 0.17f, kDeckY, kLockZ - 0.25f}, p.lock[s], 0.012f, kMetal);
+    limb(cam, {side * 0.17f, kDeckY, kLockZ + 0.25f}, p.lock[s], 0.012f, kMetal);
+
+    // Shaft: handle -> gate -> blade neck.
+    const Vec3 neck = p.blade[s] - dir * 0.42f;  // still on the shaft line
+    limb(cam, p.hand[s], p.lock[s], 0.016f, shaft);
+    limb(cam, p.lock[s], neck, 0.016f, shaft);
+    limb(cam, p.hand[s], p.hand[s] + (p.lock[s] - p.hand[s]) * 0.18f, 0.022f, kGrip);
+
+    // Blade: squared (vertical) in the water, feathered (flat) above it.
+    const Vec3 tip = p.blade[s] + flat * 0.08f;
+    if (p.bladeInWater) {
+        const Vec3 q[4] = {neck + Vec3{0, 0.05f, 0}, tip + Vec3{0, 0.08f, 0}, tip + Vec3{0, -0.14f, 0}, neck + Vec3{0, -0.08f, 0}};
+        convex3(cam, q, 4, mix(kAccent, kWaterDeep, 0.45f));
+        const Vec3 above[4] = {neck + Vec3{0, 0.05f, 0}, tip + Vec3{0, 0.08f, 0}, tip + Vec3{0, 0.0f, 0}, neck + Vec3{0, 0.0f, 0}};
+        convex3(cam, above, 4, kAccent);
+        // Puddle / splash where the blade cuts the surface.
+        for (int i = 0; i < 5; i++) {
+            const float u = static_cast<float>(i) / 4.0f;
+            const Vec3 c = vlerp(neck, tip, u);
+            const float wob = 0.5f + 0.5f * std::sin(t * kTau * 3.0f + static_cast<float>(i) * 2.1f);
+            ball(cam, {c.x, 0.0f, c.z}, 0.07f + 0.03f * wob, 0.018f, mix(kRipple, kFoam, 0.4f + 0.4f * wob));
+        }
+    } else {
+        const Vec3 q[4] = {neck + across * 0.06f, tip + across * 0.11f, tip - across * 0.11f, neck - across * 0.06f};
+        convex3(cam, q, 4, kAccent);
+        // Faint drip rings on the water under a raised blade.
+        ball(cam, {p.blade[s].x, 0.0f, p.blade[s].z}, 0.10f, 0.02f, mix(kWaterMid, kRipple, 0.35f));
+    }
+}
+
+void drawRower(const Camera& cam, const Pose& p) {
+    // Seat.
+    const Vec3 seat[4] = {{-0.12f, 0.24f, p.seatZ - 0.10f}, {0.12f, 0.24f, p.seatZ - 0.10f}, {0.12f, 0.24f, p.seatZ + 0.12f},
+                          {-0.12f, 0.24f, p.seatZ + 0.12f}};
+    convex3(cam, seat, 4, kSeat);
+
+    // Legs (furthest from the camera, mostly hidden behind the back).
+    for (int s = 0; s < 2; s++) {
+        const Rgb kit = s == 0 ? kKit : kKitShade;
+        const Rgb skin = s == 0 ? kSkin : kSkinShade;
+        const float side = s == 0 ? -1.0f : 1.0f;
+        limb(cam, p.knee[s], p.foot[s], 0.050f, skin);
+        limb(cam, {side * 0.11f, p.hip.y, p.hip.z}, p.knee[s], 0.075f, kit);
+        ball(cam, p.foot[s] + Vec3{0, -0.02f, 0.04f}, 0.055f, 0.035f, kGrip);
+    }
+
+    // Arms (in front of the torso from the rower's point of view, so drawn
+    // before it; only the parts that stick out past the back stay visible).
+    for (int s = 0; s < 2; s++) {
+        const Rgb skin = s == 0 ? kSkin : kSkinShade;
+        limb(cam, p.hand[s], p.elbow[s], 0.045f, skin);
+        limb(cam, p.elbow[s], p.shoulder[s], 0.055f, skin);
+        ball(cam, p.hand[s], 0.045f, 0.040f, skin);
+    }
+
+    // Torso: tapered back panel with rounded shoulders and a lit/shaded split.
+    const Vec3 waistL = p.hip + Vec3{-0.18f, 0.02f, -0.02f};
+    const Vec3 waistR = p.hip + Vec3{0.18f, 0.02f, -0.02f};
+    const Vec3 midC = vlerp(p.hip, p.shoulderC, 0.5f);
+    const Vec3 back[4] = {waistL, waistR, p.shoulder[1] + Vec3{0.02f, 0, -0.03f}, p.shoulder[0] + Vec3{-0.02f, 0, -0.03f}};
+    convex3(cam, back, 4, kKit);
+    const Vec3 shadeHalf[4] = {midC + Vec3{0.0f, -0.29f * 0.5f, -0.03f}, waistR, p.shoulder[1] + Vec3{0.02f, 0, -0.03f},
+                               p.shoulderC + Vec3{0.0f, 0, -0.03f}};
+    convex3(cam, shadeHalf, 4, kKitShade);
+    limb(cam, p.shoulder[0], p.shoulder[1], 0.07f, kKit);
+    ball(cam, p.shoulder[0] + Vec3{0, 0, -0.03f}, 0.09f, 0.08f, kKit);
+    ball(cam, p.shoulder[1] + Vec3{0, 0, -0.03f}, 0.09f, 0.08f, kKit);
+    // Accent stripe down the spine.
+    limb(cam, p.hip + Vec3{0, 0.06f, -0.06f}, p.shoulderC + Vec3{0, -0.04f, -0.06f}, 0.012f, kAccent);
+
+    // Neck + head (back of the head toward the camera).
+    limb(cam, p.shoulderC + Vec3{0, 0, -0.02f}, p.head + Vec3{0, -0.08f, -0.02f}, 0.045f, kSkinShade);
+    ball(cam, p.head + Vec3{0, 0, -0.03f}, 0.115f, 0.13f, kSkin);
+    ball(cam, p.head + Vec3{0, 0.03f, -0.05f}, 0.118f, 0.11f, kHair);
+    // Cap brim edge catching the light.
+    ball(cam, p.head + Vec3{-0.03f, 0.07f, -0.06f}, 0.05f, 0.025f, mix(kHair, kSun, 0.25f));
+}
+
+void drawScene(float waterTime, float drive, bool recovering) {
+    const Camera cam;
+    const Pose pose = solvePose(drive, recovering);
+
+    if (g_background != nullptr) {
+        std::memcpy(pixels(), g_background, sizeof(uint16_t) * kCW * kCH);
+    } else {
+        drawSky(cam);
+        drawWaterBase(cam);
+#ifdef ESP_PLATFORM
+        g_background = static_cast<uint16_t*>(heap_caps_malloc(sizeof(uint16_t) * kCW * kCH, MALLOC_CAP_SPIRAM));
+#else
+        g_background = static_cast<uint16_t*>(std::malloc(sizeof(uint16_t) * kCW * kCH));
+#endif
+        if (g_background != nullptr) {
+            std::memcpy(g_background, pixels(), sizeof(uint16_t) * kCW * kCH);
+        }
+    }
+    drawWaterDetail(cam, waterTime);
+    drawHullShadow(cam);
+
+    // Blades far from the camera (finish side) sit behind the hull edge;
+    // near ones (catch side) in front. Draw by depth.
+    const bool oarsBehind = pose.blade[0].z > 2.2f;
+    if (oarsBehind) {
+        drawOar(cam, pose, 0, waterTime);
+        drawOar(cam, pose, 1, waterTime);
+    }
+    drawHull(cam, waterTime);
+    if (!oarsBehind) {
+        drawOar(cam, pose, 0, waterTime);
+        drawOar(cam, pose, 1, waterTime);
+    }
+    drawRower(cam, pose);
+}
 
 bool ensureCanvas() {
     if (g_canvas != nullptr) {
@@ -86,7 +678,7 @@ bool ensureCanvas() {
     // Match LVGL LV_COLOR_FORMAT_RGB565 (RRRRRGGG GGGBBBBB). LGFX's default
     // rgb565_2Byte stores bytes swapped and produces neon banding when blitted.
     g_canvas->setColorDepth(lgfx::color_depth_t::rgb565_nonswapped);
-    if (g_canvas->createSprite(kWidth, kHeight) == nullptr) {
+    if (g_canvas->createSprite(kCW, kCH) == nullptr) {
         delete g_canvas;
         g_canvas = nullptr;
         printf("rower_scene: sprite alloc failed\n");
@@ -95,440 +687,31 @@ bool ensureCanvas() {
     return true;
 }
 
-void fillVerticalGradient(LGFX_Sprite* c, uint16_t top, uint16_t bottom) {
-    for (int y = 0; y < kHeight; y++) {
-        const float t = static_cast<float>(y) / static_cast<float>(kHeight - 1);
-        const uint16_t col = lerpColor565(c, top, bottom, t);
-        c->drawFastHLine(0, y, kWidth, col);
-    }
-}
-
-float waterY(float x, float z, float t) {
-    // Smaller amplitudes + higher spatial freq → finer ripples, fewer blotches.
-    return 0.010f * std::sin(x * 1.55f + z * 0.95f + t * kTau)
-         + 0.006f * std::sin(x * 3.1f - z * 1.7f + t * kTau * 1.6f)
-         + 0.0035f * std::sin(x * 4.6f + z * 2.6f - t * kTau * 0.8f);
-}
-
-float hullHalfBeam(float z) {
-    const float u = clamp01(z / 8.2f);
-    if (u < 0.32f) {
-        const float tt = u / 0.32f;
-        return lerp(0.05f, 0.29f, std::sin(tt * kPi * 0.5f));
-    }
-    const float tt = (u - 0.32f) / 0.68f;
-    return lerp(0.29f, 0.02f, std::pow(tt, 0.65f));
-}
-
-void drawThickLine(LGFX_Sprite* c, float x0, float y0, float x1, float y1, int width, uint16_t color) {
-    width = width < 1 ? 1 : width;
-    c->drawWideLine(x0, y0, x1, y1, width, color);
-}
-
-void fillPoly(LGFX_Sprite* c, const std::vector<Vec2>& pts, uint16_t color) {
-    if (pts.size() < 3) {
-        return;
-    }
-    const Vec2 anchor = pts[0];
-    for (size_t i = 1; i + 1 < pts.size(); i++) {
-        c->fillTriangle(
-            static_cast<int>(anchor.x), static_cast<int>(anchor.y),
-            static_cast<int>(pts[i].x), static_cast<int>(pts[i].y),
-            static_cast<int>(pts[i + 1].x), static_cast<int>(pts[i + 1].y),
-            color
-        );
-    }
-}
-
-void poly3(LGFX_Sprite* c, const Camera& cam, const std::vector<Vec3>& pts, uint16_t color) {
-    std::vector<Vec2> projected;
-    projected.reserve(pts.size());
-    for (const Vec3& p : pts) {
-        float sx, sy, ppm;
-        cam.project(p.x, p.y, p.z, sx, sy, ppm);
-        (void)ppm;
-        projected.push_back({sx, sy});
-    }
-    fillPoly(c, projected, color);
-}
-
-void line3(LGFX_Sprite* c, const Camera& cam, Vec3 a, Vec3 b, uint16_t color, float widthM) {
-    float sx0, sy0, ppm0;
-    float sx1, sy1, ppm1;
-    cam.project(a.x, a.y, a.z, sx0, sy0, ppm0);
-    cam.project(b.x, b.y, b.z, sx1, sy1, ppm1);
-    const int width = static_cast<int>(0.5f * (ppm0 + ppm1) * widthM);
-    drawThickLine(c, sx0, sy0, sx1, sy1, width < 1 ? 1 : width, color);
-}
-
-void ellipseAt(LGFX_Sprite* c, const Camera& cam, float x, float y, float z, float rx, float ry, uint16_t color) {
-    float sx, sy, ppm;
-    cam.project(x, y, z, sx, sy, ppm);
-    const int w = static_cast<int>(rx * ppm * 2.0f);
-    const int h = static_cast<int>(ry * ppm * 2.0f);
-    if (w < 2 || h < 2) {
-        return;
-    }
-    c->fillEllipse(static_cast<int>(sx), static_cast<int>(sy), w / 2, h / 2, color);
-}
-
-void drawSky(LGFX_Sprite* c, const Camera& cam) {
-    const uint16_t sunCore = color565(c, 0xF4, 0xDC, 0xA0).v;
-    const uint16_t hillFar = color565(c, 0x12, 0x2A, 0x36).v;
-    const uint16_t hillNear = color565(c, 0x0C, 0x1C, 0x26).v;
-
-    const int sunX = static_cast<int>(cam.w * 0.22f);
-    const int sunY = static_cast<int>(cam.horizon - 12);
-    c->fillCircle(sunX, sunY, 8, sunCore);
-
-    for (int band = 0; band < 2; band++) {
-        const float amp = band == 0 ? 17.0f : 12.0f;
-        const float k = band == 0 ? 0.0055f : 0.0095f;
-        const float phase = band == 0 ? 0.3f : 1.6f;
-        const float yOff = band == 0 ? -9.0f : 0.0f;
-        const uint16_t col = band == 0 ? hillFar : hillNear;
-        std::vector<Vec2> pts;
-        pts.push_back({0.0f, static_cast<float>(cam.h)});
-        for (int x = 0; x <= cam.w; x += 6) {
-            const float y = cam.horizon + yOff + amp * std::sin(x * k + phase) + 3.0f * std::sin(x * k * 2.3f + phase);
-            pts.push_back({static_cast<float>(x), y});
-        }
-        pts.push_back({static_cast<float>(cam.w), static_cast<float>(cam.h)});
-        fillPoly(c, pts, col);
-    }
-}
-
-void drawWater(LGFX_Sprite* c, const Camera& cam, float t) {
-    const uint16_t waterSurface = color565(c, 0x1B, 0x4E, 0x66).v;
-    const uint16_t waterDeep = color565(c, 0x03, 0x08, 0x0C).v;
-    const uint16_t foam = color565(c, 0xD0, 0xEA, 0xF0).v;
-
-    const int waterTop = static_cast<int>(cam.horizon);
-    for (int y = waterTop; y < cam.h; y++) {
-        const float tt = static_cast<float>(y - waterTop) / static_cast<float>(cam.h - waterTop - 1);
-        c->drawFastHLine(0, y, cam.w, lerpColor565(c, waterSurface, waterDeep, tt));
-    }
-
-    const float zs[] = {18, 14, 11, 8.5f, 6.5f, 5.0f, 3.8f, 2.9f, 2.2f, 1.7f, 1.25f, 0.95f, 0.72f, 0.55f, 0.42f};
-    const int zCount = static_cast<int>(sizeof(zs) / sizeof(zs[0]));
-    for (int i = 0; i < zCount - 1; i++) {
-        const float z0 = zs[i];
-        const float z1 = zs[i + 1];
-        std::vector<Vec2> top;
-        std::vector<Vec2> bot;
-        for (int xi = 0; xi < 31; xi++) {
-            const float x = xi * 0.7f - 10.5f;
-            float sx0, sy0, ppm0;
-            float sx1, sy1, ppm1;
-            cam.project(x, waterY(x, z0, t), z0, sx0, sy0, ppm0);
-            cam.project(x, waterY(x, z1, t), z1, sx1, sy1, ppm1);
-            (void)ppm0;
-            (void)ppm1;
-            top.push_back({sx0, sy0});
-            bot.push_back({sx1, sy1});
-        }
-        const float depth = static_cast<float>(i) / static_cast<float>(zCount - 2);
-        // Soft band tint only — avoid bright foam fills that read as large blotches.
-        const uint16_t band = lerpColor565(c, waterSurface, foam, 0.06f + 0.10f * (1.0f - depth));
-        std::vector<Vec2> poly = top;
-        for (int j = static_cast<int>(bot.size()) - 1; j >= 0; j--) {
-            poly.push_back(bot[static_cast<size_t>(j)]);
-        }
-        fillPoly(c, poly, band);
-        for (size_t j = 1; j < top.size(); j++) {
-            drawThickLine(c, top[j - 1].x, top[j - 1].y, top[j].x, top[j].y, 1, foam);
+// 2×2 box filter + 4×4 ordered dither down to the kWidth×kHeight frame.
+void downsampleInto(lv_draw_buf_t* dst) {
+    static const uint8_t kBayer4[4][4] = {{0, 8, 2, 10}, {12, 4, 14, 6}, {3, 11, 1, 9}, {15, 7, 13, 5}};
+    const uint16_t* src = pixels();
+    const int outH = std::min(kHeight, static_cast<int>(dst->header.h));
+    for (int y = 0; y < outH; y++) {
+        const uint16_t* r0 = src + static_cast<size_t>(y * 2) * kCW;
+        const uint16_t* r1 = r0 + kCW;
+        auto* out = reinterpret_cast<uint16_t*>(dst->data + static_cast<size_t>(y) * dst->header.stride);
+        for (int x = 0; x < kWidth; x++) {
+            const uint16_t a = r0[x * 2];
+            const uint16_t b = r0[x * 2 + 1];
+            const uint16_t c = r1[x * 2];
+            const uint16_t d = r1[x * 2 + 1];
+            // Channel sums are 4x the average; (sum*4 + m) >> 4 == floor(avg + m/16).
+            const uint32_t m = kBayer4[y & 3][x & 3];
+            const uint32_t sr = ((a >> 11) & 31) + ((b >> 11) & 31) + ((c >> 11) & 31) + ((d >> 11) & 31);
+            const uint32_t sg = ((a >> 5) & 63) + ((b >> 5) & 63) + ((c >> 5) & 63) + ((d >> 5) & 63);
+            const uint32_t sb = (a & 31) + (b & 31) + (c & 31) + (d & 31);
+            const uint32_t r = std::min<uint32_t>(31, (sr * 4 + m) >> 4);
+            const uint32_t g = std::min<uint32_t>(63, (sg * 4 + m) >> 4);
+            const uint32_t bl = std::min<uint32_t>(31, (sb * 4 + m) >> 4);
+            out[x] = static_cast<uint16_t>((r << 11) | (g << 5) | bl);
         }
     }
-
-    // Sparse small sparkles (was ppm*0.07 / min 3.5 → large unclean spots).
-    for (int i = 0; i < 48; i++) {
-        const float s1 = std::sin((i + 1) * 12.9898f) * 43758.5453f;
-        const float s2 = std::sin((i + 1) * 78.233f) * 23421.631f;
-        const float fx = s1 - std::floor(s1);
-        const float fz = s2 - std::floor(s2);
-        const float x = (fx - 0.5f) * 8.0f;
-        const float z = 0.45f + fz * 9.5f;
-        const float tw = 0.5f + 0.5f * std::sin(t * kTau * 1.15f + i * 0.63f);
-        if (tw < 0.55f) {
-            continue;
-        }
-        float sx, sy, ppm;
-        cam.project(x, 0.02f, z, sx, sy, ppm);
-        float r = ppm * 0.022f;
-        if (r < 1.2f) {
-            r = 1.2f;
-        } else if (r > 3.0f) {
-            r = 3.0f;
-        }
-        c->fillEllipse(static_cast<int>(sx), static_cast<int>(sy), static_cast<int>(r), static_cast<int>(r * 0.5f), foam);
-    }
-
-    // Thin traveling glints (was ppm*0.16 / min 8 → big ovals).
-    for (int i = 0; i < 10; i++) {
-        const float u = std::fmod(i / 10.0f + t * 0.35f, 1.0f);
-        const float x = (u - 0.5f) * 6.5f;
-        const float z = 1.1f + 7.0f * std::fmod(i * 0.37f + t, 1.0f);
-        float sx, sy, ppm;
-        cam.project(x, 0.025f, z, sx, sy, ppm);
-        float rw = ppm * 0.045f;
-        float rh = ppm * 0.014f;
-        if (rw < 2.0f) {
-            rw = 2.0f;
-        } else if (rw > 5.0f) {
-            rw = 5.0f;
-        }
-        if (rh < 1.0f) {
-            rh = 1.0f;
-        } else if (rh > 2.0f) {
-            rh = 2.0f;
-        }
-        c->fillEllipse(static_cast<int>(sx), static_cast<int>(sy), static_cast<int>(rw), static_cast<int>(rh), foam);
-    }
-}
-
-void drawWake(LGFX_Sprite* c, const Camera& cam, float t, float vigor) {
-    const uint16_t foam = color565(c, 0xD0, 0xEA, 0xF0).v;
-    for (int side = -1; side <= 1; side += 2) {
-        for (int i = 0; i < 6; i++) {
-            const float u = std::fmod(t * 8.0f + i, 8.0f) / 8.0f;
-            const float z = lerp(0.35f, -0.4f, u);
-            const float x = side * (0.12f + u * 0.55f);
-            const float y = 0.03f + 0.02f * std::sin(u * 8.0f + t * kTau);
-            float sx, sy, ppm;
-            cam.project(x, y, z, sx, sy, ppm);
-            float rw = ppm * (0.035f + u * 0.06f);
-            float rh = ppm * 0.015f;
-            if (rw < 1.5f) {
-                rw = 1.5f;
-            } else if (rw > 4.0f) {
-                rw = 4.0f;
-            }
-            if (rh < 1.0f) {
-                rh = 1.0f;
-            } else if (rh > 2.0f) {
-                rh = 2.0f;
-            }
-            c->fillEllipse(static_cast<int>(sx), static_cast<int>(sy), static_cast<int>(rw), static_cast<int>(rh), foam);
-            (void)vigor;
-        }
-    }
-}
-
-void drawHull(LGFX_Sprite* c, const Camera& cam) {
-    const uint16_t hullSide = color565(c, 0xC8, 0xD2, 0xDA).v;
-    const uint16_t hullShadow = color565(c, 0x7A, 0x88, 0x96).v;
-    const uint16_t deck = color565(c, 0xE4, 0xEA, 0xF0).v;
-    const uint16_t accent = color565(c, 0x3D, 0xE8, 0xB8).v;
-    const uint16_t cockpit = color565(c, 0x2A, 0x36, 0x42).v;
-    const uint16_t rigger = color565(c, 0x4A, 0x56, 0x64).v;
-
-    std::vector<Vec3> deckL, deckR, sideL, sideR;
-    for (int i = 0; i < 24; i++) {
-        const float z = i * 0.35f;
-        const float hw = hullHalfBeam(z);
-        const float deckY = 0.11f + 0.02f * (1.0f - z / 8.2f);
-        const float keelY = -0.02f;
-        deckL.push_back({-hw * 0.92f, deckY, z});
-        deckR.push_back({hw * 0.92f, deckY, z});
-        sideL.push_back({-hw, lerp(keelY, deckY, 0.35f), z});
-        sideR.push_back({hw, lerp(keelY, deckY, 0.35f), z});
-    }
-
-    std::vector<Vec3> sidePoly = sideL;
-    for (int i = static_cast<int>(deckL.size()) - 1; i >= 0; i--) {
-        sidePoly.push_back(deckL[static_cast<size_t>(i)]);
-    }
-    poly3(c, cam, sidePoly, hullSide);
-
-    std::vector<Vec3> sideRPoly = sideR;
-    for (int i = static_cast<int>(deckR.size()) - 1; i >= 0; i--) {
-        sideRPoly.push_back(deckR[static_cast<size_t>(i)]);
-    }
-    poly3(c, cam, sideRPoly, hullShadow);
-
-    std::vector<Vec3> deckPoly = deckL;
-    for (int i = static_cast<int>(deckR.size()) - 1; i >= 0; i--) {
-        deckPoly.push_back(deckR[static_cast<size_t>(i)]);
-    }
-    poly3(c, cam, deckPoly, deck);
-
-    line3(c, cam, deckL[1], deckL[deckL.size() - 4], accent, 0.012f);
-    line3(c, cam, deckR[1], deckR[deckR.size() - 4], accent, 0.012f);
-
-    poly3(
-        c, cam,
-        {
-            {-0.10f, 0.105f, 1.05f},
-            {0.10f, 0.105f, 1.05f},
-            {0.09f, 0.10f, 2.55f},
-            {-0.09f, 0.10f, 2.55f},
-        },
-        cockpit
-    );
-    line3(c, cam, {-0.055f, 0.112f, 1.15f}, {-0.05f, 0.108f, 2.45f}, rigger, 0.018f);
-    line3(c, cam, {0.055f, 0.112f, 1.15f}, {0.05f, 0.108f, 2.45f}, rigger, 0.018f);
-}
-
-void drawOars(LGFX_Sprite* c, const Camera& cam, float drive, bool recovering) {
-    const uint16_t wood = color565(c, 0xC4, 0x8A, 0x4A).v;
-    const uint16_t woodDark = color565(c, 0x5A, 0x34, 0x18).v;
-    const uint16_t rigger = color565(c, 0x4A, 0x56, 0x64).v;
-    const uint16_t blade = color565(c, 0x2A, 0x34, 0x3C).v;
-
-    const float bladeZ = lerp(4.05f, 0.72f, drive);
-    const float bladeX = lerp(1.50f, 0.92f, drive);
-    const float bladeY = recovering ? 0.32f : 0.02f;
-    const float lockZ = 1.55f;
-    const float lockY = 0.16f;
-    const float handleZ = lerp(0.72f, 1.48f, drive);
-    const float handleY = lerp(0.50f, 0.48f, drive);
-
-    for (int side = -1; side <= 1; side += 2) {
-        const Vec3 lock = {side * 0.40f, lockY, lockZ};
-        const Vec3 bladePt = {side * bladeX, bladeY, bladeZ};
-        const Vec3 handle = {side * 0.16f, handleY, handleZ};
-        line3(c, cam, {side * 0.12f, 0.12f, lockZ}, lock, rigger, 0.03f);
-        line3(c, cam, lock, {side * 0.40f, 0.02f, lockZ + 0.05f}, rigger, 0.02f);
-        line3(c, cam, handle, lock, wood, 0.035f);
-        line3(c, cam, lock, bladePt, recovering ? woodDark : wood, 0.04f);
-
-        if (recovering) {
-            poly3(
-                c, cam,
-                {
-                    {bladePt.x - side * 0.04f, bladePt.y + 0.02f, bladePt.z - 0.08f},
-                    {bladePt.x + side * 0.04f, bladePt.y + 0.02f, bladePt.z - 0.08f},
-                    {bladePt.x + side * 0.05f, bladePt.y + 0.02f, bladePt.z + 0.22f},
-                    {bladePt.x - side * 0.05f, bladePt.y + 0.02f, bladePt.z + 0.22f},
-                },
-                blade
-            );
-        } else {
-            poly3(
-                c, cam,
-                {
-                    {bladePt.x - side * 0.02f, bladePt.y + 0.07f, bladePt.z - 0.04f},
-                    {bladePt.x + side * 0.02f, bladePt.y - 0.05f, bladePt.z - 0.04f},
-                    {bladePt.x + side * 0.03f, bladePt.y - 0.05f, bladePt.z + 0.28f},
-                    {bladePt.x - side * 0.03f, bladePt.y + 0.07f, bladePt.z + 0.28f},
-                },
-                blade
-            );
-        }
-    }
-}
-
-void drawRower(LGFX_Sprite* c, const Camera& cam, float drive, bool recovering) {
-    (void)recovering;
-    const uint16_t seat = color565(c, 0x6A, 0x74, 0x80).v;
-    const uint16_t kit = color565(c, 0x1A, 0x32, 0x42).v;
-    const uint16_t kitLight = color565(c, 0x2E, 0x52, 0x64).v;
-    const uint16_t skin = color565(c, 0xE4, 0xB6, 0x8C).v;
-    const uint16_t skinShadow = color565(c, 0xB0, 0x7A, 0x54).v;
-    const uint16_t hair = color565(c, 0x1C, 0x14, 0x10).v;
-    const uint16_t woodDark = color565(c, 0x5A, 0x34, 0x18).v;
-    // Rower faces bow (+Z). Camera sits at stern (−Z) and sees back/shoulders.
-
-    const float zSeat = lerp(0.88f, 2.45f, drive);
-    const Vec3 hip = {0.0f, 0.32f, zSeat};
-    const float shZ = zSeat + lerp(-0.08f, 0.28f, drive);
-    const float shY = lerp(0.82f, 0.54f, drive);
-    const float headZ = shZ + lerp(-0.06f, 0.10f, drive);
-    const float headY = shY + 0.24f;
-    const float footZ = 2.70f;
-    const float footY = 0.11f;
-    const float kneeZ = lerp(zSeat + 0.10f, zSeat + 0.62f, drive);
-    const float kneeY = lerp(0.58f, 0.22f, drive);
-
-    poly3(
-        c, cam,
-        {
-            {-0.09f, 0.14f, zSeat - 0.06f},
-            {0.09f, 0.14f, zSeat - 0.06f},
-            {0.09f, 0.14f, zSeat + 0.08f},
-            {-0.09f, 0.14f, zSeat + 0.08f},
-        },
-        seat
-    );
-
-    for (int side = -1; side <= 1; side += 2) {
-        const Vec3 hipS = {side * 0.08f, hip.y, hip.z};
-        const Vec3 knee = {side * 0.13f, kneeY, kneeZ};
-        const Vec3 foot = {side * 0.10f, footY, footZ};
-        line3(c, cam, hipS, knee, kit, 0.10f);
-        line3(c, cam, knee, foot, kit, 0.08f);
-        ellipseAt(c, cam, knee.x, knee.y, knee.z, 0.08f, 0.07f, kitLight);
-        ellipseAt(c, cam, foot.x, foot.y, foot.z, 0.06f, 0.03f, kitLight);
-    }
-
-    poly3(
-        c, cam,
-        {
-            {-0.17f, hip.y + 0.02f, hip.z - 0.02f},
-            {0.17f, hip.y + 0.02f, hip.z - 0.02f},
-            {0.19f, shY, shZ - 0.02f},
-            {-0.19f, shY, shZ - 0.02f},
-        },
-        kit
-    );
-    line3(c, cam, {0.0f, hip.y, hip.z - 0.02f}, {0.0f, shY, shZ - 0.02f}, kitLight, 0.04f);
-    for (int side = -1; side <= 1; side += 2) {
-        ellipseAt(c, cam, side * 0.17f, shY - 0.01f, shZ - 0.03f, 0.05f, 0.04f, kitLight);
-    }
-
-    // Back of head toward stern (−Z); no face/eyes toward camera.
-    ellipseAt(c, cam, 0.0f, headY, headZ - 0.03f, 0.13f, 0.15f, skin);
-    ellipseAt(c, cam, 0.0f, headY + 0.05f, headZ - 0.05f, 0.14f, 0.09f, hair);
-    line3(c, cam, {0.0f, headY - 0.10f, headZ - 0.03f}, {0.0f, shY + 0.04f, shZ - 0.03f}, skinShadow, 0.035f);
-
-    const float handleZ = lerp(zSeat - 0.48f, zSeat - 0.08f, drive);
-    const float handleY = lerp(0.50f, 0.46f, drive);
-    for (int side = -1; side <= 1; side += 2) {
-        const Vec3 shoulder = {side * 0.16f, shY - 0.02f, shZ};
-        const Vec3 handle = {side * 0.15f, handleY, handleZ};
-        const float elbowZ = lerp(handleZ + 0.04f, (handleZ + shZ) * 0.5f, drive);
-        const float elbowY = lerp(handleY - 0.02f, (handleY + shY) * 0.5f - 0.06f, drive);
-        const Vec3 elbow = {side * 0.22f, elbowY, elbowZ};
-        line3(c, cam, shoulder, elbow, skin, 0.06f);
-        line3(c, cam, elbow, handle, skin, 0.055f);
-        ellipseAt(c, cam, handle.x, handle.y, handle.z, 0.045f, 0.04f, skinShadow);
-    }
-    line3(c, cam, {-0.16f, handleY, handleZ}, {0.16f, handleY, handleZ}, woodDark, 0.03f);
-}
-
-void drawScene(LGFX_Sprite* c, float waterTime, float drive, bool recovering) {
-    const Camera cam;
-    const uint16_t skyTop = color565(c, 0x06, 0x0A, 0x12).v;
-    const uint16_t skyHorizon = color565(c, 0x24, 0x48, 0x5C).v;
-    const uint16_t hull = color565(c, 0xF2, 0xF5, 0xF8).v;
-
-    fillVerticalGradient(c, skyTop, skyHorizon);
-    drawSky(c, cam);
-    drawWater(c, cam, waterTime);
-
-    const float vigor = recovering ? 0.0f : (0.4f + 0.6f * std::sin(std::max(drive, 0.05f) * kPi));
-    drawWake(c, cam, waterTime, vigor);
-
-    if (drive < 0.65f) {
-        drawOars(c, cam, drive, recovering);
-        drawHull(c, cam);
-        drawRower(c, cam, drive, recovering);
-    } else {
-        drawHull(c, cam);
-        drawRower(c, cam, drive, recovering);
-        drawOars(c, cam, drive, recovering);
-    }
-
-    poly3(
-        c, cam,
-        {
-            {-0.04f, 0.08f, 0.05f},
-            {0.04f, 0.08f, 0.05f},
-            {0.02f, 0.02f, -0.05f},
-            {-0.02f, 0.02f, -0.05f},
-        },
-        hull
-    );
 }
 
 } // namespace
@@ -544,24 +727,20 @@ void draw(lv_draw_buf_t* dst, float drive, float waterTime, bool recovering) {
         waterTime += 1.0f;
     }
 
-    drawScene(g_canvas, waterTime, drive, recovering);
+    drawScene(waterTime, drive, recovering);
+    downsampleInto(dst);
+    lv_draw_buf_flush_cache(dst, nullptr);
+}
 
-    const auto* src = static_cast<const uint8_t*>(g_canvas->getBuffer());
-    if (src == nullptr) {
+void releaseCanvas() {
+    std::free(g_background);  // heap_caps_malloc memory is released with free()
+    g_background = nullptr;
+    if (g_canvas == nullptr) {
         return;
     }
-    const size_t rowBytes = static_cast<size_t>(kWidth) * 2u;
-    const size_t srcStride = g_canvas->bufferLength() / static_cast<uint32_t>(kHeight);
-    const size_t dstStride = dst->header.stride;
-    const int copyH = std::min(kHeight, static_cast<int>(dst->header.h));
-    for (int y = 0; y < copyH; y++) {
-        std::memcpy(
-            dst->data + static_cast<size_t>(y) * dstStride,
-            src + static_cast<size_t>(y) * srcStride,
-            rowBytes
-        );
-    }
-    lv_draw_buf_flush_cache(dst, nullptr);
+    g_canvas->deleteSprite();
+    delete g_canvas;
+    g_canvas = nullptr;
 }
 
 } // namespace rower_scene

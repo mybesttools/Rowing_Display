@@ -31,6 +31,27 @@ constexpr uint8_t HALL_PIN = 6;
 
 constexpr uint32_t SERIAL_BAUD = 115200;
 
+// How sensor pulses are interpreted:
+//   Stroke     - every pulse is one stroke (counted at the catch). For a
+//                sensor that fires once per stroke, or a hand-tapped switch.
+//   Revolution - every pulse is one magnet pass on the flywheel; strokes
+//                are detected from flywheel speed-up/slow-down (physics
+//                model, see metrics_model.h).
+enum class PulseMode { Revolution, Stroke };
+constexpr PulseMode PULSE_MODE = PulseMode::Stroke;
+
+// Stroke mode tuning. Pulses closer than MIN_STROKE_INTERVAL_MS are switch
+// bounce, not strokes (250 ms = 240 spm, far above any real rate).
+constexpr uint32_t MIN_STROKE_INTERVAL_MS = 250;
+constexpr float METERS_PER_STROKE = 10.0f;
+// Fastest plausible boat speed (~1:23 /500m). Rapid tapping would otherwise
+// turn a fixed metres-per-stroke into absurd split/watts figures.
+constexpr float MAX_BOAT_SPEED_MPS = 6.0f;
+// Share of the stroke cycle spent on the drive (rest is recovery), and the
+// cycle assumed for the very first stroke before an interval is measured.
+constexpr float DRIVE_FRACTION = 0.4f;
+constexpr uint32_t FIRST_STROKE_INTERVAL_MS = 2000;
+
 // Smoothing and cadence behavior tuning
 constexpr float OMEGA_ALPHA = 0.2f;
 constexpr uint32_t STROKE_IDLE_TIMEOUT_MS = 2500;
@@ -40,6 +61,12 @@ constexpr uint32_t STROKE_IDLE_TIMEOUT_MS = 2500;
 // Without this, comparator chatter / contact bounce on a single real edge
 // gets read as several near-instantaneous revolutions and spikes rpm/watts.
 constexpr uint32_t MIN_PULSE_INTERVAL_US = 40000;
+
+// Input debounce (main.cpp ISR): a falling edge only counts as a pulse if
+// the line had no edges for this long before it. Rejects reed/switch
+// chatter on both press and release; well below the ~30 ms the line stays
+// high between magnet passes even at top flywheel speed.
+constexpr uint32_t PULSE_QUIET_US = 15000;
 
 // Metrics update cadence
 constexpr uint32_t LOOP_INTERVAL_MS = 50;

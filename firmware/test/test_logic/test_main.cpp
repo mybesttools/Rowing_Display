@@ -28,7 +28,7 @@ uint32_t feedBootstrapDriveThenRecovery(MetricsModel& model, uint32_t startMs) {
 } // namespace
 
 void test_metrics_model_bootstraps_drive_then_counts_stroke_after_recovery() {
-    MetricsModel model;
+    MetricsModel model(cfg::PulseMode::Revolution);
 
     uint32_t nowMs = 0;
     uint32_t nowUs = feedBootstrapDriveThenRecovery(model, nowMs);
@@ -57,7 +57,7 @@ void test_metrics_model_bootstraps_drive_then_counts_stroke_after_recovery() {
 }
 
 void test_metrics_model_fits_drag_factor_from_recovery_phase() {
-    MetricsModel model;
+    MetricsModel model(cfg::PulseMode::Revolution);
 
     uint32_t nowMs = 0;
     uint32_t nowUs = feedBootstrapDriveThenRecovery(model, nowMs);
@@ -110,7 +110,7 @@ void test_metrics_model_fits_drag_factor_from_recovery_phase() {
 }
 
 void test_metrics_model_decays_after_idle() {
-    MetricsModel model;
+    MetricsModel model(cfg::PulseMode::Revolution);
 
     uint32_t nowMs = 0;
     uint32_t nowUs = feedBootstrapDriveThenRecovery(model, nowMs);
@@ -127,7 +127,7 @@ void test_metrics_model_decays_after_idle() {
 }
 
 void test_metrics_model_reset_clears_session_but_keeps_drag_factor() {
-    MetricsModel model;
+    MetricsModel model(cfg::PulseMode::Revolution);
 
     uint32_t nowMs = 0;
     uint32_t nowUs = feedBootstrapDriveThenRecovery(model, nowMs);
@@ -150,6 +150,31 @@ void test_metrics_model_reset_clears_session_but_keeps_drag_factor() {
     model.onPulseMicros(1000000u, 1000u);
     model.tick(1010u);
     TEST_ASSERT_EQUAL_UINT32(0u, model.metrics().elapsedSec);
+}
+
+void test_stroke_mode_counts_every_pulse_as_a_stroke() {
+    MetricsModel model(cfg::PulseMode::Stroke);
+
+    // Three strokes 2 s apart (30 spm), plus a bounce 50 ms after the second.
+    model.onPulseMicros(1000000u, 1000u);
+    model.onPulseMicros(3000000u, 3000u);
+    model.onPulseMicros(3050000u, 3050u);
+    model.onPulseMicros(5000000u, 5000u);
+
+    TEST_ASSERT_EQUAL_UINT32(3u, model.metrics().strokeCount);
+    TEST_ASSERT_FLOAT_WITHIN(0.01f, 3.0f * cfg::METERS_PER_STROKE, model.metrics().distanceMeters);
+    TEST_ASSERT_FLOAT_WITHIN(0.1f, 30.0f, model.metrics().strokeRateSpm);
+
+    // Drive for the first DRIVE_FRACTION of the cycle, then recovery.
+    model.tick(5100u);
+    TEST_ASSERT_TRUE(model.metrics().phase == RowerPhase::Drive);
+    model.tick(6500u);
+    TEST_ASSERT_TRUE(model.metrics().phase == RowerPhase::Recovery);
+    TEST_ASSERT_TRUE(model.metrics().splitSecPer500m > 0.0f);
+
+    // No pulse for well over 1.5 cycles -> idle.
+    model.tick(9000u);
+    TEST_ASSERT_TRUE(model.metrics().phase == RowerPhase::Idle);
 }
 
 void test_ftms_encoder_packet_shape() {
@@ -235,6 +260,7 @@ int main(int, char **) {
     RUN_TEST(test_metrics_model_fits_drag_factor_from_recovery_phase);
     RUN_TEST(test_metrics_model_decays_after_idle);
     RUN_TEST(test_metrics_model_reset_clears_session_but_keeps_drag_factor);
+    RUN_TEST(test_stroke_mode_counts_every_pulse_as_a_stroke);
     RUN_TEST(test_ftms_encoder_packet_shape);
     RUN_TEST(test_ftms_encoder_fitness_machine_feature);
     RUN_TEST(test_ftms_control_point_acknowledges_mandatory_op_codes);

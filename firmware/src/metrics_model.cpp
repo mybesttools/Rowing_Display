@@ -1,5 +1,6 @@
 #include "metrics_model.h"
 
+#include <algorithm>
 #include <cmath>
 
 #include "config.h"
@@ -38,6 +39,9 @@ void MetricsModel::reset() {
     lastDrivePhaseDurationMs_ = 0;
     lastRecoveryPhaseDurationMs_ = 0;
 
+    strokeIntervalMs_ = 0;
+    strokeSpeedMps_ = 0.0f;
+
     omegaSmoothed_ = 0.0f;
     dragFactor_ = keepDragFactor;
 
@@ -49,6 +53,11 @@ void MetricsModel::onPulseMicros(uint32_t nowMicros, uint32_t nowMs) {
     if (sessionStartMs_ == 0) {
         sessionStartMs_ = nowMs;
         lastTickMs_ = sessionStartMs_;
+    }
+
+    if (mode_ == cfg::PulseMode::Stroke) {
+        onStrokePulse(nowMs);
+        return;
     }
 
     if (lastPulseMicros_ != 0) {
@@ -296,6 +305,73 @@ void MetricsModel::updatePhaseProgress(uint32_t nowMs) {
     metrics_.phaseProgress = progress;
 }
 
+void MetricsModel::onStrokePulse(uint32_t nowMs) {
+    if (lastStrokeStartMs_ != 0) {
+        const uint32_t intervalMs = nowMs - lastStrokeStartMs_;
+        if (intervalMs < cfg::MIN_STROKE_INTERVAL_MS) {
+            return;
+        }
+        // Only a back-to-back stroke gives a meaningful rate; the first
+        // pulse after a pause just restarts rowing.
+        if (phase_ != RowerPhase::Idle) {
+            strokeIntervalMs_ = intervalMs;
+            const float spmInstant = 60000.0f / static_cast<float>(intervalMs);
+            metrics_.strokeRateSpm = (metrics_.strokeRateSpm <= 0.0f) ? spmInstant : lerp(metrics_.strokeRateSpm, spmInstant, 0.5f);
+            strokeSpeedMps_ = std::min(cfg::METERS_PER_STROKE * 1000.0f / static_cast<float>(intervalMs), cfg::MAX_BOAT_SPEED_MPS);
+        }
+    }
+
+    metrics_.strokeCount += 1;
+    const float strokeMeters = strokeIntervalMs_ != 0
+                                   ? std::min(cfg::METERS_PER_STROKE, cfg::MAX_BOAT_SPEED_MPS * static_cast<float>(strokeIntervalMs_) / 1000.0f)
+                                   : cfg::METERS_PER_STROKE;
+    metrics_.distanceMeters += strokeMeters;
+    lastStrokeStartMs_ = nowMs;
+    lastPulseMs_ = nowMs;
+    enterPhase(RowerPhase::Drive, 0, nowMs);
+}
+
+void MetricsModel::tickStrokeMode(uint32_t nowMs) {
+    if (lastStrokeStartMs_ == 0) {
+        return;
+    }
+
+    // Replay the stroke cycle between pulses: drive for DRIVE_FRACTION of
+    // the last interval, then recovery, holding the catch pose at the end
+    // until the next pulse. Go idle once a stroke is clearly overdue.
+    const uint32_t cycleMs = strokeIntervalMs_ != 0 ? strokeIntervalMs_ : cfg::FIRST_STROKE_INTERVAL_MS;
+    const uint32_t driveMs = static_cast<uint32_t>(static_cast<float>(cycleMs) * cfg::DRIVE_FRACTION);
+    const uint32_t idleAfterMs = std::max(cfg::STROKE_IDLE_TIMEOUT_MS, cycleMs * 3 / 2);
+    const uint32_t sinceMs = nowMs - lastStrokeStartMs_;
+
+    if (sinceMs >= idleAfterMs) {
+        phase_ = RowerPhase::Idle;
+        metrics_.phaseProgress = 0.0f;
+        strokeIntervalMs_ = 0;
+        metrics_.strokeRateSpm *= 0.9f;
+        if (metrics_.strokeRateSpm < 0.5f) {
+            metrics_.strokeRateSpm = 0.0f;
+        }
+        strokeSpeedMps_ *= 0.9f;
+        if (strokeSpeedMps_ < 0.05f) {
+            strokeSpeedMps_ = 0.0f;
+        }
+    } else if (sinceMs < driveMs) {
+        phase_ = RowerPhase::Drive;
+        metrics_.phaseProgress = static_cast<float>(sinceMs) / static_cast<float>(driveMs);
+    } else {
+        phase_ = RowerPhase::Recovery;
+        metrics_.phaseProgress = std::min(1.0f, static_cast<float>(sinceMs - driveMs) / static_cast<float>(cycleMs - driveMs));
+    }
+    metrics_.phase = phase_;
+
+    // Concept2's pace/power relation: P = 2.80 * v^3.
+    metrics_.rpm = 0.0f;
+    metrics_.dragFactor = 0.0f;
+    metrics_.powerWatts = 2.80f * strokeSpeedMps_ * strokeSpeedMps_ * strokeSpeedMps_;
+    metrics_.splitSecPer500m = (strokeSpeedMps_ > 0.05f) ? (500.0f / strokeSpeedMps_) : 0.0f;
+}
+
 void MetricsModel::tick(uint32_t nowMs) {
     if (sessionStartMs_ == 0) {
         return;
@@ -308,6 +384,12 @@ void MetricsModel::tick(uint32_t nowMs) {
 
     const uint32_t dtMs = nowMs - lastTickMs_;
     lastTickMs_ = nowMs;
+
+    if (mode_ == cfg::PulseMode::Stroke) {
+        metrics_.elapsedSec = (nowMs - sessionStartMs_) / 1000;
+        tickStrokeMode(nowMs);
+        return;
+    }
 
     decayIfIdle(nowMs);
     updatePhaseProgress(nowMs);

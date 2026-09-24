@@ -2,6 +2,8 @@
 
 #include <cstdint>
 
+#include "config.h"
+
 // Drive/recovery stroke phase, exposed on RowerMetrics so the UI can sync
 // e.g. animations to the actual stroke rather than guessing off rpm.
 enum class RowerPhase { Idle, Drive, Recovery };
@@ -40,6 +42,8 @@ struct RowerMetrics {
 //     on ESP32-class hardware.
 class MetricsModel {
 public:
+    explicit MetricsModel(cfg::PulseMode mode = cfg::PULSE_MODE) : mode_(mode) {}
+
     void onPulseMicros(uint32_t nowMicros, uint32_t nowMs);
     void tick(uint32_t nowMs);
 
@@ -59,6 +63,10 @@ private:
     void decayIfIdle(uint32_t nowMs);
     void recomputeDerivedMetrics(float dtSeconds);
     void updatePhaseProgress(uint32_t nowMs);
+    void onStrokePulse(uint32_t nowMs);
+    void tickStrokeMode(uint32_t nowMs);
+
+    cfg::PulseMode mode_;
 
     RowerMetrics metrics_{};
 
@@ -79,6 +87,11 @@ private:
     // completed once this session.
     uint32_t lastDrivePhaseDurationMs_ = 0;
     uint32_t lastRecoveryPhaseDurationMs_ = 0;
+
+    // Stroke mode: last measured catch-to-catch interval (0 until two
+    // strokes in a row) and the boat speed it implies.
+    uint32_t strokeIntervalMs_ = 0;
+    float strokeSpeedMps_ = 0.0f;
 
     float omegaSmoothed_ = 0.0f; // rad/s
     float dragFactor_ = 0.0f;    // k, kg*m^2

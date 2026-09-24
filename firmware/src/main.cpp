@@ -11,8 +11,7 @@ namespace {
 
 volatile uint32_t g_lastPulseMicros = 0;
 volatile bool g_hasPulse = false;
-
-bool g_lastHallLevel = true;
+volatile uint32_t g_lastEdgeMicros = 0;
 
 MetricsModel g_model;
 BleFtmsService g_ble;
@@ -20,9 +19,17 @@ BleFtmsService g_ble;
 uint32_t g_lastLoopMs = 0;
 uint32_t g_lastNotifyMs = 0;
 
-void IRAM_ATTR onHallEdge() {
-    g_lastPulseMicros = micros();
-    g_hasPulse = true;
+// Fires on every edge. A pulse (line pulled low) only counts when the line
+// was quiet for PULSE_QUIET_US beforehand, so contact bounce on press *and*
+// on release (edges milliseconds apart) is ignored however long the press.
+void IRAM_ATTR onSensorEdge() {
+    const uint32_t now = micros();
+    const bool quiet = now - g_lastEdgeMicros >= cfg::PULSE_QUIET_US;
+    g_lastEdgeMicros = now;
+    if (quiet && digitalRead(cfg::HALL_PIN) == LOW) {
+        g_lastPulseMicros = now;
+        g_hasPulse = true;
+    }
 }
 
 void printMetrics(const RowerMetrics& m) {
@@ -46,8 +53,7 @@ void setup() {
     waveshare7::logBoardProfile();
 
     pinMode(cfg::HALL_PIN, INPUT_PULLUP);
-    g_lastHallLevel = digitalRead(cfg::HALL_PIN);
-    attachInterrupt(digitalPinToInterrupt(cfg::HALL_PIN), onHallEdge, FALLING);
+    attachInterrupt(digitalPinToInterrupt(cfg::HALL_PIN), onSensorEdge, CHANGE);
 
     g_ble.begin("RowingDisplay-ESP32");
     panel_runtime::begin();
@@ -71,16 +77,6 @@ void loop() {
         g_model.reset();
         printf("session: reset for new session\n");
     }
-
-    // Poll fallback: Waveshare routes GPIO6 to the Sensor AD header (ADC in
-    // their demo). Digital edges usually work, but a light poll catches
-    // missed interrupts when the line is probed by hand.
-    const bool hallLevel = digitalRead(cfg::HALL_PIN);
-    if (!hallLevel && g_lastHallLevel) {
-        g_lastPulseMicros = micros();
-        g_hasPulse = true;
-    }
-    g_lastHallLevel = hallLevel;
 
     if (g_hasPulse) {
         noInterrupts();

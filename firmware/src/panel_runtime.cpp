@@ -399,8 +399,11 @@ void buildSessionScreen() {
     if (g_present == nullptr) {
         printf("panel: 800x480 present alloc failed\n");
     }
+    const uint32_t precomputeStartMs = millis();
     precomputeIdleWaterFrames();
     precomputeRowerFrames();
+    rower_scene::releaseCanvas();
+    printf("panel: scene frames rendered in %lu ms\n", static_cast<unsigned long>(millis() - precomputeStartMs));
 
     g_bgImg = lv_image_create(g_sessionScreen);
     if (g_present != nullptr) {
