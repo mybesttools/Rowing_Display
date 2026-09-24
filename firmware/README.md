@@ -23,6 +23,12 @@ It is intentionally small and focused on the two reusable areas from external pr
 - Touch: GT911 on I2C (SDA=8, SCL=9, INT=4)
 - IO expander path: CH422G (used for several control lines/backlight on this board family)
 
+Manufacturer references (pin mapping, board init, demo code for this exact board):
+
+- [Manufacturer git](https://github.com/waveshareteam/ESP32-S3-Touch-LCD-7) — firmware examples, hardware files, docs, demo/reference code
+- [Product page](https://www.waveshare.com/esp32-s3-touch-lcd-7.htm)
+- [Docs page](https://docs.waveshare.net/ESP32-S3-Touch-LCD-7)
+
 Current scope of this scaffold:
 
 - Hall sensor timing + rowing metrics + BLE FTMS are active
@@ -52,7 +58,18 @@ pio device monitor
 4. Add TFT UI task and display smoothing.
 5. Expand FTMS fields and verify with Kinomap/EXR.
 
-## Note on reuse and licensing
+## License
 
-Because source licenses differ across candidate repos, this scaffold is written from scratch.
-Use it as a neutral base and selectively add code only from repositories with licenses you accept.
+This project's own code (everything under `firmware/src`, `firmware/include`,
+and `firmware/test`, plus the root `platformio.ini` files) is licensed under
+the **GNU General Public License v3.0** — see the `LICENSE` file at the repo
+root.
+
+Vendored third-party libraries under `firmware/lib/` (`ESP32_Display_Panel`,
+`ESP32_IO_Expander`) keep their own upstream licenses (Apache-2.0), included
+alongside each library's source. Nothing was copied from GPLv3 or
+unlicensed reference projects studied during development (openrowingmonitor,
+ESPRowingMonitor) — see `Hardware.md`'s "Metrics/physics model" section for
+what was independently implemented from their documented physics/concepts,
+and "Reusable GitHub repositories" for the license status of each reference
+considered.

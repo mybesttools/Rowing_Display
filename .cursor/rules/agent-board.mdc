@@ -1,0 +1,14 @@
+---
+description: On-disk handoff board for collaborating with Claude
+alwaysApply: true
+---
+
+# Agent board
+
+At the start of a session that might change this repo, read `scratchpad/agents/BOARD.md`.
+
+If you did work the other agent should know about, update `BOARD.md` and append `scratchpad/agents/log.md`. Sign as `grok`.
+
+Claim files you are editing in the Locks table; clear them when done. Put questions for Claude in Inbox.
+
+Do not embed GIFs that are not 800×480 without checking the board — see the Do not section there.

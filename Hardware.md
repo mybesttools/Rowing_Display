@@ -17,7 +17,16 @@ Living hardware notes for replacing the stock console and rotation sensor with a
 
 ### Stock display computer
 
-Battery-powered LCD. Reported metrics:
+Battery-powered LCD (~1024×576 in a user recording of `rowersession.mp4`). Observed UI:
+
+- **Layout:** scenic water/hills background with semi-transparent metric tiles overlaid. Central vertical lane holds a white rowing-figure icon; horizontal lines in that lane scroll to suggest forward motion.
+- **Primary metric:** **SPLIT /500m** at top center (large).
+- **Secondary tiles:** **SPM**, **METERS**, **WATTS** (or similar), **TIME**, stroke/calorie counters — all shown as large numerals in frosted boxes.
+- **Rowing figure:** minimalist white silhouette, stern/top-down perspective. Arms and oars sweep through catch → drive → finish → recovery; motion is tied to the stroke rather than a decorative loop.
+- **Idle:** figure holds a recovery-ish pose while the water/lane animation continues.
+- **Modes:** single session screen (no mode cycling observed in the sample clip); values start at zero before rowing begins.
+
+Reported metrics (marketing/spec sheet):
 
 - Calorie consumption
 - Time
@@ -25,6 +34,8 @@ Battery-powered LCD. Reported metrics:
 - Speed
 
 No reliable /500 m split or power model expected from the stock unit. Distance/calories on this class of monitor are typically approximate.
+
+Our replacement UI mirrors this layout in interactive mode (split prominent, SPM/meters/watts/time tiles, animated stern scene behind low-opacity tiles) but uses a flywheel-physics model for split/watts instead of the stock approximations.
 
 ### Stock sensing (to be removed)
 
@@ -172,9 +183,77 @@ Pre-buy checklist:
 Stock and DIY air-rower meters are not Concept2-accurate by default.
 
 - Treat distance/split as **internally consistent** first.
-- Store a **drag / meters factor** in NVS.
+- Store the calibration constants below in NVS once tuned.
 - Expose calibration via app or console long-press after mechanical install is stable.
 - Tune against known pieces (timed intervals, perceived 2k effort, etc.).
+
+### Metrics/physics model (implemented)
+
+`firmware/src/metrics_model.cpp` replaced an early flat-formula placeholder
+(`power = rpm² × constant`) with a flywheel-physics model — drive/recovery
+phase detection from pulse-period trend, a per-stroke drag factor fit during
+recovery, and power/distance derived from that drag factor rather than a
+made-up curve.
+
+**Inspired by** (concepts and physics formulas only — no code copied; see the
+"Reusable GitHub repositories" section below for full license notes on each):
+
+- [openrowingmonitor](https://github.com/JaapvanEkris/openrowingmonitor) (GPLv3) — the drag-factor-as-linear-regression
+  derivation and the `P = k·ω³` power model, both documented in that project's
+  physics docs (itself citing Anu Dudhia's "The Physics of ErgoMeters").
+- [ESPRowingMonitor](https://github.com/Abasz/ESPRowingMonitor) (no LICENSE file, treated as
+  all-rights-reserved) — general shape of an embedded, pulse-timing-driven
+  drive/recovery state machine.
+
+**Governing physics**: during recovery the flywheel decelerates under drag
+alone, `I·dω/dt = -k·ω²`, which integrates to `1/ω` being linear in elapsed
+time with slope `k/I`. Each recovery phase collects `(t, 1/ω)` samples and
+fits that line (OLS); a fit is only accepted if it clears an R² quality gate
+and a plausibility range, then blended into a running drag factor via EMA.
+Power is `P = k·ω³`; linear speed is `v = (k/C)^(1/3)·ω`, the same
+cube-root flywheel-to-"boat" scaling Concept2-style ergometers use.
+
+**Two constants still need real calibration** (currently placeholders in
+`firmware/include/config.h`, prominently flagged in comments there):
+
+- `FLYWHEEL_INERTIA_KGM2` — the Dunlop fan flywheel's actual moment of
+  inertia (kg·m²). Scales every fitted drag factor and therefore every watts
+  number. Needs a physical measurement (bifilar pendulum swing test) or
+  iterative tuning once real numbers are on screen.
+- `BOAT_SCALING_CONSTANT` (`C`) — empirical, per-machine, not derivable from
+  first principles. Tune against known-distance test pieces, same as the
+  flat `METERS_PER_REV` constant it replaced.
+
+Validated so far: a synthetic unit test (`firmware/test/test_logic/test_main.cpp`)
+confirms the OLS fit recovers a known analytically-constructed drag factor;
+on real hardware (hand-waved magnet, not yet a mounted flywheel) the fitted
+drag factor visibly locks onto a stable value across strokes once a few
+clean recovery phases are seen, and stays put through further noisy input —
+the R²/plausibility gating is doing its job.
+
+### On-device UI (implemented)
+
+`firmware/src/panel_runtime.cpp` now renders a real LVGL screen instead of
+the earlier raw-`drawBitmap` bar-graph placeholder: large SPLIT time up top
+(the one number that matters mid-stroke), a row of SPM/METERS/WATTS tiles,
+and a smaller TIME/STROKES row underneath. Confirmed live on hardware: all
+fields update in real time as the Hall sensor pulses.
+
+The LVGL↔`esp_display_panel` bridge (`firmware/src/esp_lv_adapter_arduino.*`)
+is adapted from Waveshare's own `10_lvgl_v9_demo` example for this exact
+board (Apache-2.0 — see the file headers for the full attribution note).
+Unlike the GPLv3/no-license research sources elsewhere in this project,
+Apache-2.0 explicitly permits reuse with attribution, so this one **is**
+adapted code, not a clean-room reimplementation — it includes the
+double-framebuffer full-refresh path (`configFrameBufferNumber(2)` +
+`configRGB_BounceBufferSize()` before `board->begin()`) that avoids the
+screen-tear issue this board's own docs warn about with a naive
+single-buffer RGB setup, which our earlier raw-`drawBitmap` code was
+running without.
+
+Next layer, not yet built: the boat/water-scene visualization discussed
+alongside this metrics screen — deferred until after the metrics
+foundation (this screen) was solid, per the agreed scoping.
 
 ---
 
@@ -207,6 +286,11 @@ Status:
 
 - Ordered: Waveshare 7" ESP32-S3 display board, Hall sensors
 - Already available: remaining listed items
+- **Two-unit plan confirmed** (2026-08-13): a second Waveshare ESP32-S3 7"
+  display board is being ordered for the Kuipers AquaRower in Amsterdam,
+  alongside the existing Dunlop Air Rower build in Germany. 4 Hall sensors
+  are on hand from the original order — enough for both builds plus spares,
+  so no new Hall sensor purchase is needed for the second unit.
 
 ### Core electronics (required)
 
@@ -384,6 +468,32 @@ These are the strongest reusable codebases found for this exact stack: ESP32 + r
 - License:
      - Treat as no-reuse-until-clarified for direct code copy
 
+### 7) ESPRowingMonitor
+
+- Repo: https://github.com/Abasz/ESPRowingMonitor
+- Fit for this project:
+     - ESP32-native (PlatformIO + Arduino framework + `pioarduino` platform + NimBLE-Arduino) — same toolchain as this project, unlike every other entry above
+     - Ships a `genericAir` rower profile — calibration tuning for air-resistance flywheel machines, matching the Dunlop's resistance type
+     - Implements JaapvanEkris's improved OpenRowingMonitor stroke-detection algorithm, adapted for embedded/interrupt-driven pulse capture
+     - Clean board-profile vs. rower-profile separation (pins/hardware vs. per-machine physical calibration constants) — worth mirroring regardless of code reuse
+- Notes:
+     - Actively maintained, PlatformIO-based, directly comparable architecture to this repo
+- License:
+     - **No LICENSE file found in the repo** (checked via GitHub API, no `license` field either) — treat as all-rights-reserved. Do not copy code directly; used here for architecture/algorithm inspiration only (see "Metrics/physics model" section above for what was actually built from it).
+
+### 8) rowing_cpu
+
+- Repo: https://github.com/rsboni/rowing_cpu
+- Fit for this project:
+     - Also a water-tank paddle-wheel rower (three paddles rotating in a tank) — directly relevant to the Kuipers AquaRower profile
+     - Real-world data point: used **5 magnets** on the drive wheel (not 1) with a reed switch for adequate resolution on this class of machine — adopted for `profiles/kuipers_aquarower.h`'s `MAGNETS_PER_REV`
+- Notes:
+     - The repo is a React/Firebase web dashboard only — no ESP32 firmware source is actually in the repo, just a README description of one
+     - Stroke/SPM detection is a simple fixed-threshold + timer heuristic, no physics model — less sophisticated than what's already implemented here, so no algorithmic upgrade from this one
+     - Last updated Jan 2023, 1 star — treat as a minor/stale reference, not an actively maintained project
+- License:
+     - **No LICENSE file found in the repo** — treat as all-rights-reserved. Cited here for the magnet-count data point only, no code viewed beyond a skim of `App.js`/`canvas.jsx` to confirm what it does, nothing reused.
+
 ### Recommended reuse strategy for this project
 
 1. Start from `openrowingmonitor-ESP32S3-ZephyrOS` for architecture and FTMS flow.
@@ -409,3 +519,5 @@ These are the strongest reusable codebases found for this exact stack: ESP32 + r
 | 2026-08-11 | Initial specs from stock machine notes + architecture decisions (full sensor + monitor replacement, ESP32, Hall, TFT, BLE). |
 | 2026-08-11 | Added reusable GitHub repository shortlist, license risk notes, and fork/copy strategy for implementation planning. |
 | 2026-08-11 | Updated Waveshare 7-inch board recommendation to "buy" since power supply constraints are not a concern. |
+| 2026-08-13 | Replaced the placeholder rpm²-based metrics model with a flywheel-physics model (drag factor via recovery-phase regression, `P = k·ω³`, cube-root distance scaling), clean-room inspired by openrowingmonitor and ESPRowingMonitor (see "Reusable GitHub repositories" and "Metrics/physics model" above). Added ESPRowingMonitor to the repo shortlist. |
+| 2026-08-13 | Two machines confirmed in scope: the Dunlop Air Rower (flywheel, Germany) and a Kuipers AquaRower (water resistance, adjustable 12-21L tank, Amsterdam) — added a rower-profile split so firmware/calibration constants can target either. |
