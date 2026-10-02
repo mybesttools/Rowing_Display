@@ -149,6 +149,9 @@ lv_obj_t* makeMetricRow(lv_obj_t* parent, int32_t height) {
     lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
     lv_obj_set_flex_align(row, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
     lv_obj_clear_flag(row, LV_OBJ_FLAG_SCROLLABLE);
+    // Layout-only container spanning the full width: must not swallow taps
+    // meant for the escape button it overlaps.
+    lv_obj_clear_flag(row, LV_OBJ_FLAG_CLICKABLE);
     return row;
 }
 
@@ -431,6 +434,7 @@ void buildSessionScreen() {
     lv_obj_align(escapeBtn, LV_ALIGN_TOP_RIGHT, 0, 0);
     lv_obj_add_flag(escapeBtn, LV_OBJ_FLAG_IGNORE_LAYOUT);
     lv_obj_add_event_cb(escapeBtn, onEscapeClicked, LV_EVENT_CLICKED, nullptr);
+    lv_obj_set_ext_click_area(escapeBtn, 16);
 
     lv_obj_t* escapeLabel = lv_label_create(escapeBtn);
     lv_label_set_text(escapeLabel, LV_SYMBOL_CLOSE);
@@ -473,6 +477,10 @@ void buildSessionScreen() {
     g_tiles[g_tileCount++] = makeTile(bottomBar, "TIME", &g_timeLabel);
     g_tiles[g_tileCount++] = makeTile(bottomBar, "STROKES", &g_strokesLabel);
     g_tiles[g_tileCount++] = makeTile(bottomBar, "METERS", &g_distanceLabel);
+
+    // The top bar is created after the escape button and overlaps it; keep
+    // the button on top so it gets the touch.
+    lv_obj_move_foreground(escapeBtn);
 }
 
 } // namespace

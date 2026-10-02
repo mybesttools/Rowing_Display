@@ -1,16 +1,14 @@
 #include "rower_scene.h"
 
+#include "scene_background.h"
+
 #define LGFX_USE_V1
 #include <LovyanGFX.hpp>
 
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
-#include <cstdlib>
 #include <cstring>
-#ifdef ESP_PLATFORM
-#include "esp_heap_caps.h"
-#endif
 
 namespace rower_scene {
 
@@ -19,7 +17,7 @@ namespace {
 // Frames are drawn at kSS× resolution into one scratch sprite, then box-
 // filtered down to kWidth×kHeight with ordered dithering. That gives every
 // edge (triangles and ellipses included, which LGFX doesn't anti-alias) a
-// smooth ramp and hides RGB565 banding in the sky/water gradients, at a
+// smooth ramp and hides RGB565 banding in the drawn shapes, at a
 // boot-time-only cost. The sprite is freed by releaseCanvas() once the
 // frame set is precomputed.
 constexpr int kSS = 2;
@@ -30,9 +28,6 @@ constexpr float kPi = 3.14159265f;
 constexpr float kTau = kPi * 2.0f;
 
 LGFX_Sprite* g_canvas = nullptr;
-// Sky + water gradient are identical in every frame: rendered once, then
-// copied in as the starting point of each frame.
-uint16_t* g_background = nullptr;
 
 // ---------------------------------------------------------------------------
 // Small math/color helpers
@@ -75,18 +70,11 @@ uint16_t pack(Rgb c) {
     return static_cast<uint16_t>(((ch(c.r) & 0xF8) << 8) | ((ch(c.g) & 0xFC) << 3) | (ch(c.b) >> 3));
 }
 
-// Palette: dusk scene that sits under the dark UI (see panel_runtime colors).
-constexpr Rgb kSkyTop = rgb(0x070B14);
-constexpr Rgb kSkyMid = rgb(0x1A2F45);
-constexpr Rgb kSkyGlow = rgb(0x6A5A5A);
+// Palette for everything drawn over the scene_background photo (dusk lake).
 constexpr Rgb kSun = rgb(0xFFE3A8);
-constexpr Rgb kHillFar = rgb(0x1F3346);
-constexpr Rgb kHillNear = rgb(0x122130);
-constexpr Rgb kTreeLine = rgb(0x0B1620);
-constexpr Rgb kWaterHorizon = rgb(0x3A5A6E);
 constexpr Rgb kWaterMid = rgb(0x173A4C);
 constexpr Rgb kWaterDeep = rgb(0x06131C);
-constexpr Rgb kRipple = rgb(0x8FC3D6);
+constexpr Rgb kRipple = rgb(0xF2C9A0);  // sky glow reflected on the crests
 constexpr Rgb kFoam = rgb(0xE6F4F8);
 constexpr Rgb kHullLit = rgb(0xF4F7FA);
 constexpr Rgb kHullShade = rgb(0xAEBAC6);
@@ -138,9 +126,10 @@ struct Pt {
 
 struct Camera {
     float camZ = -2.1f;
-    float camY = 1.7f;
+    float camY = 1.45f;
     float focal = 300.0f * kSS;
-    float horizon = 58.0f * kSS;
+    // Matches the waterline baked into scene_background.
+    float horizon = scene_background::kHorizonY * kSS;
 
     Pt project(Vec3 p, float* ppmOut = nullptr) const {
         float zc = p.z - camZ;
@@ -165,29 +154,6 @@ struct Camera {
 
 uint16_t* pixels() {
     return static_cast<uint16_t*>(g_canvas->getBuffer());
-}
-
-// Two-tone 2×2 checker between the two nearest RGB565 values, so the
-// downsample recovers sub-LSB gradient steps instead of hard bands.
-void ditherRow(int y, int x0, int x1, Rgb c) {
-    if (y < 0 || y >= kCH) {
-        return;
-    }
-    x0 = std::max(x0, 0);
-    x1 = std::min(x1, kCW);
-    const float r5 = clamp01(c.r / 255.0f) * 31.0f;
-    const float g6 = clamp01(c.g / 255.0f) * 63.0f;
-    const float b5 = clamp01(c.b / 255.0f) * 31.0f;
-    // Thresholds for the 4 positions of a 2x2 Bayer cell.
-    static const float kBayer[2][2] = {{0.125f, 0.625f}, {0.875f, 0.375f}};
-    uint16_t* row = pixels() + static_cast<size_t>(y) * kCW;
-    for (int x = x0; x < x1; x++) {
-        const float th = kBayer[y & 1][x & 1];
-        const uint16_t r = static_cast<uint16_t>(std::min(31.0f, std::floor(r5 + th)));
-        const uint16_t g = static_cast<uint16_t>(std::min(63.0f, std::floor(g6 + th)));
-        const uint16_t b = static_cast<uint16_t>(std::min(31.0f, std::floor(b5 + th)));
-        row[x] = static_cast<uint16_t>((r << 11) | (g << 5) | b);
-    }
 }
 
 void blendPixel(int x, int y, Rgb c, float a) {
@@ -275,87 +241,9 @@ void ball(const Camera& cam, Vec3 c, float rxM, float ryM, Rgb col) {
     ellipse(p, rxM * ppm, ryM * ppm, col);
 }
 
-// Fills everything below the curve top(x) down to `bottom`, with an
-// anti-aliased top edge. Used for hill silhouettes.
-template <typename F>
-void fillBelowCurve(F top, int bottom, Rgb col) {
-    const uint16_t c = pack(col);
-    for (int x = 0; x < kCW; x++) {
-        const float y = top(static_cast<float>(x));
-        const int yi = static_cast<int>(std::floor(y));
-        blendPixel(x, yi, col, 1.0f - (y - static_cast<float>(yi)));
-        if (bottom > yi + 1) {
-            g_canvas->drawFastVLine(x, yi + 1, bottom - yi - 1, c);
-        }
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Scene layers
-
-void drawSky(const Camera& cam) {
-    const int horizon = static_cast<int>(cam.horizon);
-    for (int y = 0; y < horizon; y++) {
-        const float t = static_cast<float>(y) / static_cast<float>(horizon);
-        const Rgb c = t < 0.6f ? mix(kSkyTop, kSkyMid, t / 0.6f) : mix(kSkyMid, kSkyGlow, (t - 0.6f) / 0.4f);
-        ditherRow(y, 0, kCW, c);
-    }
-
-    // Low sun with a soft halo, left of the boat so the rower is back-lit
-    // from the side (matches the lit/shaded limb colors below).
-    const Pt sun = {kCW * 0.24f, cam.horizon - 20.0f * kSS};
-    const float glowR = 42.0f * kSS;
-    for (int y = static_cast<int>(sun.y - glowR); y <= static_cast<int>(sun.y + glowR); y++) {
-        for (int x = static_cast<int>(sun.x - glowR); x <= static_cast<int>(sun.x + glowR); x++) {
-            const float d = std::hypot(static_cast<float>(x) - sun.x, static_cast<float>(y) - sun.y) / glowR;
-            if (d < 1.0f) {
-                blendPixel(x, y, kSun, 0.30f * (1.0f - d) * (1.0f - d));
-            }
-        }
-    }
-    ellipse(sun, 7.0f * kSS, 7.0f * kSS, kSun);
-
-    // Two hill layers plus a ragged tree line right on the horizon.
-    const float h = cam.horizon;
-    fillBelowCurve(
-        [&](float x) {
-            const float u = x / kCW;
-            return h - kSS * (13.0f + 9.0f * std::sin(u * 5.1f + 0.4f) + 4.0f * std::sin(u * 13.0f + 1.3f));
-        },
-        horizon, kHillFar
-    );
-    fillBelowCurve(
-        [&](float x) {
-            const float u = x / kCW;
-            return h - kSS * (6.0f + 5.0f * std::sin(u * 7.3f + 2.2f) + 2.0f * std::sin(u * 21.0f));
-        },
-        horizon, kHillNear
-    );
-    fillBelowCurve(
-        [&](float x) {
-            const float u = x / kCW;
-            const float jag = std::fabs(std::sin(u * 157.0f)) * 1.6f + std::fabs(std::sin(u * 61.0f + 0.7f)) * 1.2f;
-            return h - kSS * (1.2f + jag);
-        },
-        horizon, kTreeLine
-    );
-}
-
-Rgb waterColorAt(const Camera& cam, float y) {
-    const float u = clamp01((y - cam.horizon) / (static_cast<float>(kCH) - cam.horizon));
-    return u < 0.25f ? mix(kWaterHorizon, kWaterMid, u / 0.25f) : mix(kWaterMid, kWaterDeep, (u - 0.25f) / 0.75f);
-}
-
-void drawWaterBase(const Camera& cam) {
-    const int horizon = static_cast<int>(cam.horizon);
-    for (int y = horizon; y < kCH; y++) {
-        ditherRow(y, 0, kCW, waterColorAt(cam, static_cast<float>(y)));
-    }
-}
-
 void drawWaterDetail(const Camera& cam, float t) {
     // Sun path: broken glints on the water below the sun.
-    const float sunX = kCW * 0.24f;
+    const float sunX = scene_background::kSunX * kSS;
     for (int i = 0; i < 18; i++) {
         const float z = 2.5f + 22.0f * std::pow(static_cast<float>(i) / 18.0f, 1.6f);
         float ppm = 0.0f;
@@ -633,24 +521,27 @@ void drawRower(const Camera& cam, const Pose& p) {
     ball(cam, p.head + Vec3{-0.03f, 0.07f, -0.06f}, 0.05f, 0.025f, mix(kHair, kSun, 0.25f));
 }
 
+// Pixel-doubles the 400×240 photo into the canvas; downsampleInto() then
+// returns it unchanged (2×2 identical samples), so its dithering survives.
+void drawBackground() {
+    static_assert(scene_background::kWidth * kSS == kCW && scene_background::kHeight * kSS == kCH, "background size");
+    uint16_t* dst = pixels();
+    for (int y = 0; y < scene_background::kHeight; y++) {
+        const uint16_t* src = scene_background::kPixels + static_cast<size_t>(y) * scene_background::kWidth;
+        uint16_t* row = dst + static_cast<size_t>(y * kSS) * kCW;
+        for (int x = 0; x < scene_background::kWidth; x++) {
+            row[x * 2] = src[x];
+            row[x * 2 + 1] = src[x];
+        }
+        std::memcpy(row + kCW, row, sizeof(uint16_t) * kCW);
+    }
+}
+
 void drawScene(float waterTime, float drive, bool recovering) {
     const Camera cam;
     const Pose pose = solvePose(drive, recovering);
 
-    if (g_background != nullptr) {
-        std::memcpy(pixels(), g_background, sizeof(uint16_t) * kCW * kCH);
-    } else {
-        drawSky(cam);
-        drawWaterBase(cam);
-#ifdef ESP_PLATFORM
-        g_background = static_cast<uint16_t*>(heap_caps_malloc(sizeof(uint16_t) * kCW * kCH, MALLOC_CAP_SPIRAM));
-#else
-        g_background = static_cast<uint16_t*>(std::malloc(sizeof(uint16_t) * kCW * kCH));
-#endif
-        if (g_background != nullptr) {
-            std::memcpy(g_background, pixels(), sizeof(uint16_t) * kCW * kCH);
-        }
-    }
+    drawBackground();
     drawWaterDetail(cam, waterTime);
     drawHullShadow(cam);
 
@@ -733,8 +624,6 @@ void draw(lv_draw_buf_t* dst, float drive, float waterTime, bool recovering) {
 }
 
 void releaseCanvas() {
-    std::free(g_background);  // heap_caps_malloc memory is released with free()
-    g_background = nullptr;
     if (g_canvas == nullptr) {
         return;
     }
