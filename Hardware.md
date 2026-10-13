@@ -147,6 +147,20 @@ actually powering the board from that rail.
   Switch` + onboard charge circuit (`CHG`/`DONE` LEDs) exists for running
   the board off a LiPo instead of USB-C. Distinct from the RTC coin cell.
   Not part of the current USB-C-powered install.
+  **No battery level is readable by firmware on either board** — confirmed
+  from both boards' schematics (CS8501 charger IC on both; its `CHRG`/
+  `STDBY`/`DONE` status pins drive LEDs directly, no GPIO fan-out). The 7"
+  board has a bare `VBAT` voltage divider (200K/100K) ending at an
+  unpopulated test point (`TP1`), not wired to any pin; the 5" board
+  doesn't even have that. Every raw GPIO on both boards is already claimed
+  (display/touch/SD/RS485/CAN/USB, plus the RTC interrupt on the 5" board's
+  `GPIO6` — the pin the 7" uses for "Sensor AD"). Showing battery level
+  would need a hardware modification: either an external low-battery
+  threshold circuit into the 5" board's still-unused `DI1` terminal (binary
+  low-battery flag only, reuses the same CH422G read already built for the
+  reed sensor), or sacrificing one of this project's unused GPIOs (RS485/
+  CAN, not wired up in firmware) and bodge-wiring it to `VBAT` for an
+  actual ADC voltage/percentage reading.
 - **TF/SD card**: slot in the top-left corner. SPI on GPIO11 (MOSI)/
   GPIO12 (SCK)/GPIO13 (MISO), CS via CH422G EXIO4 — same SPI pins as the 7"
   board, just with CS behind the expander instead of a raw GPIO. Not
