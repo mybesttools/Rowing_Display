@@ -24,6 +24,10 @@ bool consumeSessionStartRequested() {
     return false;
 }
 
+void* ioExpanderBase() {
+    return nullptr;
+}
+
 } // namespace panel_runtime
 
 #else
@@ -621,6 +625,14 @@ bool consumeSessionStartRequested() {
     }
     g_sessionStartRequested = false;
     return true;
+}
+
+void* ioExpanderBase() {
+    if (!g_board) {
+        return nullptr;
+    }
+    auto* expander = g_board->getIO_Expander();
+    return expander ? expander->getBase() : nullptr;
 }
 
 } // namespace panel_runtime

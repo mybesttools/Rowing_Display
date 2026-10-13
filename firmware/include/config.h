@@ -22,12 +22,39 @@
 
 namespace cfg {
 
-// GPIO6 is the one pin this board's own examples (04_Sensor_AD) expose for a
-// general external sensor. Every other low GPIO is already claimed onboard:
-// LCD data/timing (0,1,2,3,5,7,10,14,17,18,21,38-48), touch+expander I2C
-// (8,9,4), SD card SPI (11,12,13), RS485 (15,16), and native USB/TWAI (19,20).
-// GPIO16 in particular is the RS485 transceiver's TX line — do not use it here.
+// Sensor input source differs by board:
+//
+// - 7"/devkit (default): GPIO6 is the one pin this board's own examples
+//   (04_Sensor_AD) expose for a general external sensor, wired straight to
+//   the "Sensor AD" 3-pin header (3V3/GND/AD). Every other low GPIO is
+//   already claimed onboard: LCD data/timing (0,1,2,3,5,7,10,14,17,18,21,
+//   38-48), touch+expander I2C (8,9,4), SD card SPI (11,12,13), RS485
+//   (15,16), and native USB/TWAI (19,20). GPIO16 in particular is the RS485
+//   transceiver's TX line — do not use it here. A raw pin, so sensing it
+//   uses a hardware CHANGE interrupt (see sensor_input.cpp).
+//
+// - 5" board: has no equivalent raw-GPIO sensor header. Its terminal block's
+//   DI0/DI1 are read through the CH422G IO expander over I2C (same chip the
+//   display/touch/SD-CS already use), not a direct ESP32 pin, so there's no
+//   hardware interrupt available for them — sensor_input.cpp polls instead.
+//   CH422G's 8 IO pins share one direction register bit (all-input or
+//   all-output, see esp_io_expander_ch422g.c), which rules out a true INPUT
+//   mode for DI0 without also flipping the shared backlight/LCD-reset/
+//   touch-reset/SD-CS pins to inputs. Instead this relies on CH422G's
+//   quasi-bidirectional pins: DI0's output latch is left at its board-reset
+//   default (logic 1, weak pull), and an external contact pulling it low is
+//   still visible on a plain digitalRead() over I2C — no pinMode() call
+//   needed or wanted.
+#if defined(ROWING_BOARD_LCD_5)
+constexpr uint8_t HALL_EXPANDER_PIN = 0; // CH422G IO0 = board's "DI0" terminal
+// How often sensor_input::poll() reads the expander, and the quiet-before-
+// edge debounce window (same purpose as PULSE_QUIET_US below, but
+// millisecond-scale since I2C transactions can't resolve microsecond edges).
+constexpr uint32_t HALL_POLL_INTERVAL_MS = 5;
+constexpr uint32_t HALL_POLL_QUIET_MS = 15;
+#else
 constexpr uint8_t HALL_PIN = 6;
+#endif
 
 constexpr uint32_t SERIAL_BAUD = 115200;
 

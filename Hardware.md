@@ -104,6 +104,54 @@ Fan cage: magnet(s) → Hall sensor → ESP32 → color TFT (primary UI)
 - Mount ESP32 at the **console**, not inside the dusty/hot fan cage.
 - Prefer a single small magnet; check for obvious fan imbalance after install.
 
+### Sensor wiring differs by board
+
+The 7"/devkit board exposes a dedicated 3-pin "Sensor AD" header (3V3/GND/AD)
+wired straight to a raw ESP32 pin (GPIO6). The **5" board (Waveshare
+ESP32-S3-Touch-LCD-5)** has no equivalent header — instead it has a 16-way
+screw terminal:
+
+```
+VIN GND VOUT GND | SDA SCL | CAN_L CAN_H | 485_B 485_A | DO0 DO1 DI_COM GND DI0 DI1
+```
+
+`DI0`/`DI1` are **isolated digital inputs read through the board's CH422G
+I2C IO expander**, not a raw GPIO (confirmed against
+[Waveshare's wiki](https://www.waveshare.com/wiki/ESP32-S3-Touch-LCD-5):
+DI0→CH422G EXIO0, DI1→CH422G EXIO5). Per the CH422G datasheet/driver, its 8
+`IO0-7` pins share one global direction bit (all-input or all-output), and
+this board already drives LCD reset, touch reset, backlight and the SD
+card's CS line through that same chip — so DI0 can't be put into a true
+"input mode" without breaking those. The firmware instead relies on
+CH422G's quasi-bidirectional pins: DI0's output latch is left at its
+power-on default (logic 1, weak pull), and an external contact pulling it
+low is still visible on a plain I2C read. See `firmware/src/sensor_input.cpp`
+for the polled backend (no hardware interrupt is possible here, unlike the
+7"'s GPIO6 ISR) and the "Sensor input source" comment in
+`firmware/include/config.h`.
+
+**Reed switch wiring on the 5" board** (dry contact / passive mode — no
+external power needed): one wire to `DI0`, the other to `DI_COM`. Leave
+`DI_COM` unconnected to any power rail (floating = "dry contact passive
+input" per Waveshare's docs — the board's internal pull sources the sensing
+current, the switch just needs to bridge the two terminals). Don't use
+`DO0`/`DO1` (outputs), and don't wire anything to `VIN`/`VOUT` unless
+actually powering the board from that rail.
+
+### Other 5" board connectors (not wired for the sensor, noted for later)
+
+- **RTC battery**: a CR927 coin-cell holder (labeled `RTC`) backs a
+  PCF85063 RTC chip, keeping time across power cycles. Optional — not
+  currently used by the firmware (no RTC driver wired up).
+- **Main battery**: a separate 2-pin JST `Battery` connector + `Battery
+  Switch` + onboard charge circuit (`CHG`/`DONE` LEDs) exists for running
+  the board off a LiPo instead of USB-C. Distinct from the RTC coin cell.
+  Not part of the current USB-C-powered install.
+- **TF/SD card**: slot in the top-left corner. SPI on GPIO11 (MOSI)/
+  GPIO12 (SCK)/GPIO13 (MISO), CS via CH422G EXIO4 — same SPI pins as the 7"
+  board, just with CS behind the expander instead of a raw GPIO. Not
+  currently used by the firmware.
+
 ---
 
 ## Monitor / MCU (new)

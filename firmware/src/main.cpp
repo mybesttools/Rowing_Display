@@ -5,32 +5,16 @@
 #include "config.h"
 #include "metrics_model.h"
 #include "panel_runtime.h"
+#include "sensor_input.h"
 #include "waveshare_7_board.h"
 
 namespace {
-
-volatile uint32_t g_lastPulseMicros = 0;
-volatile bool g_hasPulse = false;
-volatile uint32_t g_lastEdgeMicros = 0;
 
 MetricsModel g_model;
 BleFtmsService g_ble;
 
 uint32_t g_lastLoopMs = 0;
 uint32_t g_lastNotifyMs = 0;
-
-// Fires on every edge. A pulse (line pulled low) only counts when the line
-// was quiet for PULSE_QUIET_US beforehand, so contact bounce on press *and*
-// on release (edges milliseconds apart) is ignored however long the press.
-void IRAM_ATTR onSensorEdge() {
-    const uint32_t now = micros();
-    const bool quiet = now - g_lastEdgeMicros >= cfg::PULSE_QUIET_US;
-    g_lastEdgeMicros = now;
-    if (quiet && digitalRead(cfg::HALL_PIN) == LOW) {
-        g_lastPulseMicros = now;
-        g_hasPulse = true;
-    }
-}
 
 void printMetrics(const RowerMetrics& m) {
     printf(
@@ -52,8 +36,7 @@ void setup() {
 
     waveshare7::logBoardProfile();
 
-    pinMode(cfg::HALL_PIN, INPUT_PULLUP);
-    attachInterrupt(digitalPinToInterrupt(cfg::HALL_PIN), onSensorEdge, CHANGE);
+    sensor_input::begin();
 
     g_ble.begin("RowingDisplay-ESP32");
     panel_runtime::begin();
@@ -62,31 +45,19 @@ void setup() {
 }
 
 void loop() {
-#ifdef SIMULATION_MODE
-    static uint32_t nextPulseUs = 0;
-    const uint32_t nowUs = micros();
-    if (nextPulseUs == 0 || static_cast<int32_t>(nowUs - nextPulseUs) >= 0) {
-        g_lastPulseMicros = nowUs;
-        g_hasPulse = true;
-        // Roughly 24 RPM when MAGNETS_PER_REV=2: pulse every 1.25s.
-        nextPulseUs = nowUs + 1250000u;
-    }
-#endif
+    const uint32_t nowMs = millis();
+    sensor_input::poll(nowMs);
 
     if (panel_runtime::consumeSessionStartRequested()) {
         g_model.reset();
         printf("session: reset for new session\n");
     }
 
-    if (g_hasPulse) {
-        noInterrupts();
-        const uint32_t pulseMicros = g_lastPulseMicros;
-        g_hasPulse = false;
-        interrupts();
-        g_model.onPulseMicros(pulseMicros, millis());
+    uint32_t pulseMicros = 0;
+    if (sensor_input::consumePulse(pulseMicros)) {
+        g_model.onPulseMicros(pulseMicros, nowMs);
     }
 
-    const uint32_t nowMs = millis();
     if (nowMs - g_lastLoopMs >= cfg::LOOP_INTERVAL_MS) {
         g_lastLoopMs = nowMs;
         g_model.tick(nowMs);
