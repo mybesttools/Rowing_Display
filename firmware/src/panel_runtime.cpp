@@ -50,15 +50,12 @@ esp_panel::drivers::LCD* g_lcd = nullptr;
 lv_display_t* g_display = nullptr;
 
 // Colors chosen for glanceability from a few meters away: dark background,
-// dark blue tile text (readable against both the near-black tile fill and
-// the bright sky/water showing through at low tile opacity in interactive
-// mode — near-white text washed out against that bright background), one
-// accent color reserved for the single most important number (split) so
-// the eye finds it first.
+// white tile text, one accent color reserved for the single most important
+// number (split) so the eye finds it first.
 constexpr lv_color_t kColorBg = LV_COLOR_MAKE(0x0B, 0x0F, 0x14);
 constexpr lv_color_t kColorTile = LV_COLOR_MAKE(0x15, 0x1B, 0x23);
-constexpr lv_color_t kColorCaption = LV_COLOR_MAKE(0x2B, 0x4A, 0x7A);
-constexpr lv_color_t kColorValue = LV_COLOR_MAKE(0x1A, 0x36, 0x6E);
+constexpr lv_color_t kColorCaption = LV_COLOR_MAKE(0xF2, 0xF4, 0xF7);
+constexpr lv_color_t kColorValue = LV_COLOR_MAKE(0xFF, 0xFF, 0xFF);
 constexpr lv_color_t kColorAccent = LV_COLOR_MAKE(0x3D, 0xE8, 0xB8);
 // Fallback fill behind the interactive scene when tiles are transparent.
 constexpr lv_color_t kColorWaterDeep = LV_COLOR_MAKE(0x03, 0x08, 0x0C);
