@@ -10,7 +10,7 @@ namespace rower_scene {
 constexpr int kWidth = 400;
 constexpr int kHeight = 240;
 constexpr int kIdleWaterFrameCount = 10;
-constexpr int kStrokeFrameCount = 12;
+constexpr int kStrokeFrameCount = 16;
 
 // Draw one frame into `dst` (400×240 RGB565). Rendered at 2× and
 // downsampled, so edges and gradients come out anti-aliased.

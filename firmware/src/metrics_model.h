@@ -40,9 +40,19 @@ struct RowerMetrics {
 //     reserved — used for architecture/approach inspiration only): the
 //     general shape of a pulse-timing-driven drive/recovery state machine
 //     on ESP32-class hardware.
+struct ModelParams {
+    cfg::PulseMode mode = cfg::kDefaultPulseMode;
+    cfg::MachineParams machine = cfg::machinePreset(cfg::kDefaultMachine);
+};
+
 class MetricsModel {
 public:
-    explicit MetricsModel(cfg::PulseMode mode = cfg::PULSE_MODE) : mode_(mode) {}
+    explicit MetricsModel(const ModelParams& params = ModelParams{}) : params_(params) {}
+    explicit MetricsModel(cfg::PulseMode mode) { params_.mode = mode; }
+
+    // New machine/mode settings. Drops the fitted drag factor, since it was
+    // fitted under the old inertia/machine.
+    void setParams(const ModelParams& params);
 
     void onPulseMicros(uint32_t nowMicros, uint32_t nowMs);
     void tick(uint32_t nowMs);
@@ -66,7 +76,7 @@ private:
     void onStrokePulse(uint32_t nowMs);
     void tickStrokeMode(uint32_t nowMs);
 
-    cfg::PulseMode mode_;
+    ModelParams params_;
 
     RowerMetrics metrics_{};
 

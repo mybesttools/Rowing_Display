@@ -83,6 +83,10 @@ esp_err_t esp_lv_adapter_start(void);
 esp_err_t esp_lv_adapter_deinit(void);
 esp_err_t esp_lv_adapter_lock(int32_t timeout_ms);
 void esp_lv_adapter_unlock(void);
+// Guards the I2C bus shared by touch and the IO expander. Held only for the
+// transaction itself, unlike esp_lv_adapter_lock() which spans a whole render.
+bool esp_lv_adapter_i2c_lock(uint32_t timeout_ms);
+void esp_lv_adapter_i2c_unlock(void);
 lv_display_t *esp_lv_adapter_register_display(const esp_lv_adapter_display_config_t *config);
 lv_indev_t *esp_lv_adapter_register_touch(const esp_lv_adapter_touch_config_t *config);
 

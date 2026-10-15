@@ -49,27 +49,33 @@ void MetricsModel::reset() {
     recoveryStartMicros_ = 0;
 }
 
+void MetricsModel::setParams(const ModelParams& params) {
+    params_ = params;
+    dragFactor_ = 0.0f;
+    metrics_.dragFactor = 0.0f;
+}
+
 void MetricsModel::onPulseMicros(uint32_t nowMicros, uint32_t nowMs) {
     if (sessionStartMs_ == 0) {
         sessionStartMs_ = nowMs;
         lastTickMs_ = sessionStartMs_;
     }
 
-    if (mode_ == cfg::PulseMode::Stroke) {
+    if (params_.mode == cfg::PulseMode::Stroke) {
         onStrokePulse(nowMs);
         return;
     }
 
     if (lastPulseMicros_ != 0) {
         const uint32_t dtMicros = nowMicros - lastPulseMicros_;
-        if (dtMicros < cfg::MIN_PULSE_INTERVAL_US) {
+        if (dtMicros < params_.machine.minPulseGapMs * 1000u) {
             // Debounce: ignore this edge and keep waiting from the last
             // accepted pulse, instead of resetting the reference point.
             return;
         }
 
         const float dtSeconds = static_cast<float>(dtMicros) / 1000000.0f;
-        const float omegaInstant = (2.0f * kPi) / (dtSeconds * cfg::MAGNETS_PER_REV);
+        const float omegaInstant = (2.0f * kPi) / (dtSeconds * params_.machine.pulsesPerRev);
         omegaSmoothed_ = lerp(omegaSmoothed_, omegaInstant, cfg::OMEGA_ALPHA);
 
         updatePhase(nowMicros, nowMs, dtMicros);
@@ -125,7 +131,7 @@ void MetricsModel::updatePhase(uint32_t nowMicros, uint32_t nowMs, uint32_t dtMi
 
     // Debounce: require the current phase to have held for a minimum time
     // before accepting a flip, so a single noisy pulse can't flip it.
-    const uint32_t minHoldMs = (phase_ == RowerPhase::Drive) ? cfg::MIN_DRIVE_TIME_MS : cfg::MIN_RECOVERY_TIME_MS;
+    const uint32_t minHoldMs = (phase_ == RowerPhase::Drive) ? params_.machine.minDriveMs : params_.machine.minRecoveryMs;
     if (nowMs - phaseStartMs_ < minHoldMs) {
         return;
     }
@@ -183,7 +189,7 @@ void MetricsModel::onRecoveryEnded() {
     if (r2 < cfg::MIN_FIT_R2) {
         return;
     }
-    if (k < cfg::DRAG_FACTOR_MIN || k > cfg::DRAG_FACTOR_MAX) {
+    if (k < params_.machine.dragFactorMin || k > params_.machine.dragFactorMax) {
         return;
     }
 
@@ -233,7 +239,7 @@ bool MetricsModel::fitDragFactor(float& outK, float& outR2) const {
     }
 
     outR2 = (ssTot > 1e-9f) ? (1.0f - ssRes / ssTot) : 0.0f;
-    outK = slope * cfg::FLYWHEEL_INERTIA_KGM2;
+    outK = slope * params_.machine.flywheelInertia;
     return true;
 }
 
@@ -269,7 +275,7 @@ void MetricsModel::recomputeDerivedMetrics(float dtSeconds) {
 
     // Use the seeded placeholder until the first real fit lands, so power
     // and distance aren't pinned at zero for the whole first stroke.
-    const float k = (dragFactor_ > 0.0f) ? dragFactor_ : cfg::INITIAL_DRAG_FACTOR;
+    const float k = (dragFactor_ > 0.0f) ? dragFactor_ : params_.machine.initialDragFactor;
 
     // P = k * omega^3 (see metrics_model.h doc comment for derivation and
     // attribution).
@@ -278,7 +284,7 @@ void MetricsModel::recomputeDerivedMetrics(float dtSeconds) {
 
     // v = (k / C)^(1/3) * omega — cube-root scaling from flywheel drag to a
     // reference "boat" speed, same family Concept2-style ergometers use.
-    const float metersPerSec = cbrtf(k / cfg::BOAT_SCALING_CONSTANT) * omegaSmoothed_;
+    const float metersPerSec = cbrtf(k / params_.machine.boatConstant) * omegaSmoothed_;
     metrics_.distanceMeters += metersPerSec * dtSeconds;
 
     metrics_.splitSecPer500m = (metersPerSec > 0.05f) ? (500.0f / metersPerSec) : 0.0f;
@@ -385,7 +391,7 @@ void MetricsModel::tick(uint32_t nowMs) {
     const uint32_t dtMs = nowMs - lastTickMs_;
     lastTickMs_ = nowMs;
 
-    if (mode_ == cfg::PulseMode::Stroke) {
+    if (params_.mode == cfg::PulseMode::Stroke) {
         metrics_.elapsedSec = (nowMs - sessionStartMs_) / 1000;
         tickStrokeMode(nowMs);
         return;

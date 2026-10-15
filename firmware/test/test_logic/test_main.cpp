@@ -72,7 +72,7 @@ void test_metrics_model_fits_drag_factor_from_recovery_phase() {
     // which rearranges to a simple recurrence for t_i.
     constexpr float kTestDragFactor = 0.002f;
     constexpr float kOmega0 = 10.0f; // rad/s
-    const float slope = kTestDragFactor / cfg::FLYWHEEL_INERTIA_KGM2;
+    const float slope = kTestDragFactor / cfg::machinePreset(cfg::kDefaultMachine).flywheelInertia;
     constexpr float kTwoPi = 6.283185307f;
 
     float t = 0.0f; // seconds since recovery start

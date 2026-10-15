@@ -28,14 +28,20 @@ void* ioExpanderBase() {
     return nullptr;
 }
 
+void resyncDisplay() {}
+
 } // namespace panel_runtime
 
 #else
 
 #include "esp_display_panel.hpp"
 #include "esp_heap_caps.h"
+#include "esp_lcd_panel_rgb.h"
 #include "esp_lv_adapter_arduino.h"
 #include "rower_scene.h"
+#include "settings.h"
+#include "settings_screen.h"
+#include "ui_theme.h"
 
 #include <cmath>
 #include <cstring>
@@ -49,15 +55,8 @@ std::shared_ptr<Board> g_board;
 esp_panel::drivers::LCD* g_lcd = nullptr;
 lv_display_t* g_display = nullptr;
 
-// Colors chosen for glanceability from a few meters away: dark background,
-// white tile text, one accent color reserved for the single most important
-// number (split) so the eye finds it first.
-constexpr lv_color_t kColorBg = LV_COLOR_MAKE(0x0B, 0x0F, 0x14);
-constexpr lv_color_t kColorTile = LV_COLOR_MAKE(0x15, 0x1B, 0x23);
-constexpr lv_color_t kColorCaption = LV_COLOR_MAKE(0xF2, 0xF4, 0xF7);
-constexpr lv_color_t kColorValue = LV_COLOR_MAKE(0xFF, 0xFF, 0xFF);
-constexpr lv_color_t kColorAccent = LV_COLOR_MAKE(0x3D, 0xE8, 0xB8);
-// Fallback fill behind the interactive scene when tiles are transparent.
+using namespace ui_theme;
+// Fallback fill behind the scene where the image doesn't cover.
 constexpr lv_color_t kColorWaterDeep = LV_COLOR_MAKE(0x03, 0x08, 0x0C);
 
 constexpr int32_t kPanelW = 800;
@@ -71,6 +70,8 @@ constexpr int32_t kBottomBarH = 88;
 constexpr uint32_t kClipFrameMs = 90;
 
 lv_obj_t* g_homeScreen = nullptr;
+lv_obj_t* g_homeSubtitle = nullptr;
+lv_obj_t* g_settingsScreen = nullptr;
 lv_obj_t* g_sessionScreen = nullptr;
 lv_obj_t* g_bgImg = nullptr;
 lv_draw_buf_t* g_present = nullptr;
@@ -83,21 +84,12 @@ int g_idleWaterFrameIndex = 0;
 
 lv_draw_buf_t* g_rowerFrames[rower_scene::kStrokeFrameCount] = {};
 int g_rowerFrameCount = 0;
-bool g_interactiveMode = false;
 RowerPhase g_lastSyncedPhase = RowerPhase::Idle;
 // Latest Drive/Recovery cyclePosition, sampled by animTimerCb() at its own
 // fixed 90ms cadence rather than redrawn synchronously on every 50ms
 // metrics tick - the tighter cadence was enough to underrun the RGB bounce
 // buffer (see scratchpad/agents/log.md 2026-08-22 entry for the repro).
 float g_cyclePosition = 0.0f;
-
-// Tile containers, so their background opacity can be adjusted per mode:
-// low opacity lets the interactive scene show through, but that same low
-// opacity made tiles nearly invisible against session mode's flat solid
-// background - kept high there instead.
-constexpr int kTileCount = 5;
-lv_obj_t* g_tiles[kTileCount] = {};
-int g_tileCount = 0;
 
 lv_obj_t* g_splitLabel = nullptr;
 lv_obj_t* g_spmLabel = nullptr;
@@ -114,12 +106,9 @@ void formatMmSs(char* out, size_t cap, uint32_t totalSec) {
 
 lv_obj_t* makeTile(lv_obj_t* parent, const char* caption, lv_obj_t** outValueLabel) {
     lv_obj_t* tile = lv_obj_create(parent);
-    // Opacity is set per-mode in setInteractiveMode() (low so the scene shows
-    // through in interactive mode, high enough to read against the flat
-    // background in normal mode) - LV_OPA_80 here is just the initial
-    // value before that first runs.
+    // Low opacity so the stern scene shows through.
     lv_obj_set_style_bg_color(tile, kColorTile, 0);
-    lv_obj_set_style_bg_opa(tile, LV_OPA_80, 0);
+    lv_obj_set_style_bg_opa(tile, LV_OPA_30, 0);
     lv_obj_set_style_border_width(tile, 0, 0);
     lv_obj_set_style_radius(tile, 12, 0);
     lv_obj_set_style_pad_all(tile, 12, 0);
@@ -279,9 +268,6 @@ void precomputeRowerFrames() {
 }
 
 void animTimerCb(lv_timer_t* /*t*/) {
-    if (!g_interactiveMode) {
-        return;
-    }
     if (g_lastSyncedPhase != RowerPhase::Idle) {
         drawRowerFrame();
         return;
@@ -303,38 +289,21 @@ void syncBackgroundToPhase(RowerPhase phase) {
     }
 }
 
-void hideStrokeGifs() {
-    if (g_animTimer != nullptr) {
-        lv_timer_pause(g_animTimer);
-    }
+void startScene() {
     if (g_bgImg != nullptr) {
-        lv_obj_add_flag(g_bgImg, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_clear_flag(g_bgImg, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_move_background(g_bgImg);
     }
-    g_lastSyncedPhase = RowerPhase::Idle;
+    syncBackgroundToPhase(RowerPhase::Idle);
+    if (g_animTimer != nullptr) {
+        lv_timer_resume(g_animTimer);
+    }
 }
 
-void setInteractiveMode(bool enabled) {
-    g_interactiveMode = enabled;
-    // High opacity in normal mode (flat solid background, tiles need to
-    // stand out on their own) vs low opacity in interactive mode (lets the
-    // stern scene show through) - same tile style otherwise.
-    const lv_opa_t tileOpa = enabled ? LV_OPA_30 : LV_OPA_80;
-    for (int i = 0; i < g_tileCount; i++) {
-        lv_obj_set_style_bg_opa(g_tiles[i], tileOpa, 0);
-    }
-    if (enabled) {
-        lv_obj_set_style_bg_color(g_sessionScreen, kColorWaterDeep, 0);
-        if (g_bgImg != nullptr) {
-            lv_obj_clear_flag(g_bgImg, LV_OBJ_FLAG_HIDDEN);
-            lv_obj_move_background(g_bgImg);
-        }
-        syncBackgroundToPhase(RowerPhase::Idle);
-        if (g_animTimer != nullptr) {
-            lv_timer_resume(g_animTimer);
-        }
-    } else {
-        lv_obj_set_style_bg_color(g_sessionScreen, kColorBg, 0);
-        hideStrokeGifs();
+// Off the session screen the 90 ms frame blits only cost render time.
+void stopScene() {
+    if (g_animTimer != nullptr) {
+        lv_timer_pause(g_animTimer);
     }
 }
 
@@ -346,20 +315,29 @@ void showScreen(lv_obj_t* screen) {
     lv_screen_load(screen);
 }
 
-void onStartNormalClicked(lv_event_t* /*e*/) {
-    setInteractiveMode(false);
-    g_sessionStartRequested = true;
-    showScreen(g_sessionScreen);
-}
-
-void onStartInteractiveClicked(lv_event_t* /*e*/) {
-    setInteractiveMode(true);
+void onStartClicked(lv_event_t* /*e*/) {
+    startScene();
     g_sessionStartRequested = true;
     showScreen(g_sessionScreen);
 }
 
 void onEscapeClicked(lv_event_t* /*e*/) {
+    stopScene();
     showScreen(g_homeScreen);
+}
+
+void setHomeSubtitle(const settings::Settings& s) {
+    lv_label_set_text_fmt(g_homeSubtitle, "%s  |  %s", settings::machineName(s.machine), settings::sensorName(s.sensor));
+}
+
+void onSettingsDone(const settings::Settings& inEffect) {
+    setHomeSubtitle(inEffect);
+    showScreen(g_homeScreen);
+}
+
+void onSettingsClicked(lv_event_t* /*e*/) {
+    settings_screen::load();
+    showScreen(g_settingsScreen);
 }
 
 lv_obj_t* makeMenuButton(lv_obj_t* parent, const char* text, lv_event_cb_t onClick) {
@@ -388,17 +366,22 @@ void buildHomeScreen() {
     lv_obj_clear_flag(g_homeScreen, LV_OBJ_FLAG_SCROLLABLE);
 
     lv_obj_t* title = lv_label_create(g_homeScreen);
-    lv_label_set_text(title, "ROWING");
+    lv_label_set_text(title, "Let's get rowing!");
     lv_obj_set_style_text_color(title, kColorAccent, 0);
     lv_obj_set_style_text_font(title, &lv_font_montserrat_48, 0);
 
-    makeMenuButton(g_homeScreen, "START SESSION", onStartNormalClicked);
-    makeMenuButton(g_homeScreen, "START SESSION (INTERACTIVE)", onStartInteractiveClicked);
+    g_homeSubtitle = lv_label_create(g_homeScreen);
+    lv_obj_set_style_text_color(g_homeSubtitle, kColorHint, 0);
+    lv_obj_set_style_text_font(g_homeSubtitle, &lv_font_montserrat_24, 0);
+    setHomeSubtitle(settings::current());
+
+    makeMenuButton(g_homeScreen, "START SESSION", onStartClicked);
+    makeMenuButton(g_homeScreen, "SETTINGS", onSettingsClicked);
 }
 
 void buildSessionScreen() {
     g_sessionScreen = lv_obj_create(nullptr);
-    lv_obj_set_style_bg_color(g_sessionScreen, kColorBg, 0);
+    lv_obj_set_style_bg_color(g_sessionScreen, kColorWaterDeep, 0);
     lv_obj_set_style_pad_all(g_sessionScreen, kSessionPad, 0);
     lv_obj_clear_flag(g_sessionScreen, LV_OBJ_FLAG_SCROLLABLE);
 
@@ -470,17 +453,17 @@ void buildSessionScreen() {
     lv_obj_set_style_text_font(g_splitLabel, &lv_font_montserrat_48, 0);
     lv_label_set_text(g_splitLabel, "-:--");
 
-    g_tiles[g_tileCount++] = makeTile(topBar, "SPM", &g_spmLabel);
-    g_tiles[g_tileCount++] = makeTile(topBar, "WATTS", &g_wattsLabel);
+    makeTile(topBar, "SPM", &g_spmLabel);
+    makeTile(topBar, "WATTS", &g_wattsLabel);
 
     // Bottom band: session time, stroke count, distance.
     lv_obj_t* bottomBar = makeMetricRow(g_sessionScreen, kBottomBarH);
     lv_obj_align(bottomBar, LV_ALIGN_BOTTOM_MID, 0, 0);
     lv_obj_add_flag(bottomBar, LV_OBJ_FLAG_IGNORE_LAYOUT);
 
-    g_tiles[g_tileCount++] = makeTile(bottomBar, "TIME", &g_timeLabel);
-    g_tiles[g_tileCount++] = makeTile(bottomBar, "STROKES", &g_strokesLabel);
-    g_tiles[g_tileCount++] = makeTile(bottomBar, "METERS", &g_distanceLabel);
+    makeTile(bottomBar, "TIME", &g_timeLabel);
+    makeTile(bottomBar, "STROKES", &g_strokesLabel);
+    makeTile(bottomBar, "METERS", &g_distanceLabel);
 
     // The top bar is created after the escape button and overlaps it; keep
     // the button on top so it gets the touch.
@@ -559,6 +542,7 @@ bool begin() {
     esp_lv_adapter_lock(-1);
     buildHomeScreen();
     buildSessionScreen();
+    g_settingsScreen = settings_screen::build(onSettingsDone);
     lv_screen_load(g_homeScreen);
     esp_lv_adapter_unlock();
 
@@ -575,16 +559,14 @@ void update(const RowerMetrics& metrics) {
     // animation timer runs inside lv_timer_handler() and can hold the mutex
     // for a full 800×480 blit; a non-blocking lock(0) here meant metrics and
     // phase never reached the UI while water animation still ran.
-    if (g_interactiveMode) {
-        if (metrics.phase == RowerPhase::Idle) {
-            if (metrics.phase != g_lastSyncedPhase) {
-                g_lastSyncedPhase = RowerPhase::Idle;
-                g_idleWaterFrameIndex = 0;
-            }
-        } else {
-            g_lastSyncedPhase = metrics.phase;
-            g_cyclePosition = cyclePositionForMetrics(metrics);
+    if (metrics.phase == RowerPhase::Idle) {
+        if (metrics.phase != g_lastSyncedPhase) {
+            g_lastSyncedPhase = RowerPhase::Idle;
+            g_idleWaterFrameIndex = 0;
         }
+    } else {
+        g_lastSyncedPhase = metrics.phase;
+        g_cyclePosition = cyclePositionForMetrics(metrics);
     }
 
     char buf[16];
@@ -633,6 +615,12 @@ void* ioExpanderBase() {
     }
     auto* expander = g_board->getIO_Expander();
     return expander ? expander->getBase() : nullptr;
+}
+
+void resyncDisplay() {
+    if (g_lcd != nullptr && g_lcd->getBus()->getBasicAttributes().type == ESP_PANEL_BUS_TYPE_RGB) {
+        esp_lcd_rgb_panel_restart(g_lcd->getHandle());
+    }
 }
 
 } // namespace panel_runtime

@@ -97,11 +97,29 @@ static void flush_cb(lv_display_t *disp, const lv_area_t *area, uint8_t *px_map)
     }
 }
 
+static SemaphoreHandle_t i2c_mux() {
+    static SemaphoreHandle_t mux = xSemaphoreCreateMutex();
+    return mux;
+}
+
+bool esp_lv_adapter_i2c_lock(uint32_t timeout_ms) {
+    return xSemaphoreTake(i2c_mux(), pdMS_TO_TICKS(timeout_ms)) == pdTRUE;
+}
+
+void esp_lv_adapter_i2c_unlock(void) {
+    xSemaphoreGive(i2c_mux());
+}
+
 static void touch_read_cb(lv_indev_t *indev, lv_indev_data_t *data) {
     Touch *touch = static_cast<Touch *>(lv_indev_get_user_data(indev));
     TouchPoint point = {};
 
-    if ((touch != nullptr) && (touch->readPoints(&point, 1, 0) > 0)) {
+    int points = 0;
+    if ((touch != nullptr) && esp_lv_adapter_i2c_lock(50)) {
+        points = touch->readPoints(&point, 1, 0);
+        esp_lv_adapter_i2c_unlock();
+    }
+    if (points > 0) {
         data->point.x = point.x;
         data->point.y = point.y;
         data->state = LV_INDEV_STATE_PRESSED;

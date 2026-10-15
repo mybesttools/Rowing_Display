@@ -20,4 +20,10 @@ bool consumeSessionStartRequested();
 // cast it back to esp_expander::Base.
 void* ioExpanderBase();
 
+// Re-syncs the RGB panel's DMA with the frame. Call after anything that
+// suspends the cache (flash writes): the panel loses its place in the
+// framebuffer and stays shifted otherwise (CONFIG_LCD_RGB_RESTART_IN_VSYNC
+// is off in the prebuilt Arduino IDF).
+void resyncDisplay();
+
 } // namespace panel_runtime

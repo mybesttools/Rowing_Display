@@ -115,28 +115,36 @@ screw terminal:
 VIN GND VOUT GND | SDA SCL | CAN_L CAN_H | 485_B 485_A | DO0 DO1 DI_COM GND DI0 DI1
 ```
 
-`DI0`/`DI1` are **isolated digital inputs read through the board's CH422G
-I2C IO expander**, not a raw GPIO (confirmed against
-[Waveshare's wiki](https://www.waveshare.com/wiki/ESP32-S3-Touch-LCD-5):
-DI0→CH422G EXIO0, DI1→CH422G EXIO5). Per the CH422G datasheet/driver, its 8
-`IO0-7` pins share one global direction bit (all-input or all-output), and
-this board already drives LCD reset, touch reset, backlight and the SD
-card's CS line through that same chip — so DI0 can't be put into a true
-"input mode" without breaking those. The firmware instead relies on
-CH422G's quasi-bidirectional pins: DI0's output latch is left at its
-power-on default (logic 1, weak pull), and an external contact pulling it
-low is still visible on a plain I2C read. See `firmware/src/sensor_input.cpp`
-for the polled backend (no hardware interrupt is possible here, unlike the
-7"'s GPIO6 ISR) and the "Sensor input source" comment in
-`firmware/include/config.h`.
+`DI0`/`DI1` are **opto-isolated digital inputs read through the board's
+CH422G I2C IO expander**, not a raw GPIO: DI0→CH422G EXIO0, DI1→CH422G
+EXIO5 (Waveshare's `05_IO_Test` sample in
+[waveshareteam/ESP32-S3-Touch-LCD-5](https://github.com/waveshareteam/ESP32-S3-Touch-LCD-5)).
 
-**Reed switch wiring on the 5" board** (dry contact / passive mode — no
-external power needed): one wire to `DI0`, the other to `DI_COM`. Leave
-`DI_COM` unconnected to any power rail (floating = "dry contact passive
-input" per Waveshare's docs — the board's internal pull sources the sensing
-current, the switch just needs to bridge the two terminals). Don't use
-`DO0`/`DO1` (outputs), and don't wire anything to `VIN`/`VOUT` unless
-actually powering the board from that rail.
+Input circuit, from the board schematic (`hardware/schematics/
+ESP32-S3-Touch-LCD-5-Sch.pdf`, "DI/DO" block): the board feeds `DI_COM`
+itself (5V → 1N5822 → 220Ω → `DI_COM`), then 3.6kΩ → a PC814 opto LED →
+the `DIx` terminal. The opto's transistor pulls EXIO0/EXIO5 to GND against
+a 4.7kΩ pull-up to 3V3. So **contact closed = reads 0, open = reads 1**.
+
+Firmware facts (`firmware/src/sensor_input.cpp`):
+
+- CH422G's IO0-7 share one direction bit, and RD_IO only reflects the real
+  pin levels in **input** mode — in output mode it reads back its own latch
+  (always 1). The board init leaves IO0-7 all-output, so the firmware calls
+  `enableAllIO_Input()` once after the display is up, as Waveshare's sample
+  does. Nothing writes the expander after init, so display/backlight/touch
+  are unaffected (verified on hardware 2026-10-15).
+- Touch (GT911) and the CH422G share I2C host 0 (SCL 9 / SDA 8). LVGL reads
+  touch from its own task under `esp_lv_adapter_lock()`; DI reads take the
+  same lock, otherwise they collide and hit the CH422G driver's 10 ms
+  timeout (`read_input_reg failed`).
+
+**Reed switch wiring on the 5" board** (dry contact): one wire to `DI1`
+(firmware currently reads DI1 — `cfg::HALL_EXPANDER_PIN = 5`), the other to
+**`GND`**. Leave `DI_COM` unconnected. Wiring the switch across `DIx` and
+`DI_COM` shorts out the opto LED and can never trigger (this was the
+original, wrong instruction here); grounding `DI_COM` just removes the
+supply. Don't use `DO0`/`DO1` (outputs).
 
 ### Other 5" board connectors (not wired for the sensor, noted for later)
 
@@ -245,9 +253,47 @@ Pre-buy checklist:
 Stock and DIY air-rower meters are not Concept2-accurate by default.
 
 - Treat distance/split as **internally consistent** first.
-- Store the calibration constants below in NVS once tuned.
-- Expose calibration via app or console long-press after mechanical install is stable.
 - Tune against known pieces (timed intervals, perceived 2k effort, etc.).
+
+### On-device settings (implemented)
+
+Home screen → **SETTINGS**. Picking a machine or sensor type loads its
+factory defaults (`firmware/include/machine_presets.h`); each value can then
+be adjusted with −/+ (hold to repeat). Values that differ from the default
+show in the accent color, with the default under each row. **DEFAULTS**
+restores the defaults for the selected machine + sensor; **SAVE** stores the
+settings in NVS (`firmware/src/settings.cpp`) and applies them at once.
+The build env (`-kuipers` or not) only decides the machine preset on first
+boot. Every boot and save writes a `C,` line to the pulse log.
+
+Machine presets:
+
+| Setting | Kuipers AquaRower | Dunlop Air Rower 750 | What it does |
+|---|---|---|---|
+| Pulses per wheel turn | 1 | 1 | magnets passing the sensor per turn; scales rpm/speed/watts |
+| Flywheel inertia (kg·m²) | 1.9 | 0.10 | turns the fitted recovery slope into drag factor k; scales watts (∝k) and distance (∝k^⅓) |
+| Start drag factor | 0.026 | 0.035 | k used until the first recovery fit lands |
+| Boat constant C | 2.80 | 3.7 | v = (k/C)^⅓·ω; 2.80 = Concept2's P = 2.80·v³ |
+| Min drive time (ms) | 250 | 200 | a drive must last this long before recovery can start |
+| Min recovery time (ms) | 600 | 400 | a recovery must last this long before the next stroke counts |
+| Min pulse gap (ms) | 40 | 40 | faster pulses are treated as noise |
+
+Kuipers values are calibrated (2026-10-15, against the original monitor:
+354 m in 2:00; 1.33 m per wheel turn, ~73 W at 29 spm). Dunlop inertia and C
+are still uncalibrated placeholders.
+
+Sensor presets and other settings:
+
+| Setting | Default | Options |
+|---|---|---|
+| Sensor type | Reed switch | Reed switch (debounce 15 ms), Hall sensor (debounce 2 ms) |
+| Debounce (ms) | from sensor type | line must be quiet this long before an edge counts |
+| Each pulse is | a wheel turn | a wheel turn (strokes detected from wheel speed), a whole stroke |
+| Input terminal (5" board only) | DI1 | DI0, DI1 |
+
+Deliberately not in the UI (algorithm internals, fixed in `config.h`):
+drag-fit plausibility band, drag-fit smoothing, regression point count/R²,
+rpm smoothing, idle timeout, and the per-stroke-mode tuning.
 
 ### Metrics/physics model (implemented)
 
@@ -548,7 +594,7 @@ These are the strongest reusable codebases found for this exact stack: ESP32 + r
 - Repo: https://github.com/rsboni/rowing_cpu
 - Fit for this project:
      - Also a water-tank paddle-wheel rower (three paddles rotating in a tank) — directly relevant to the Kuipers AquaRower profile
-     - Real-world data point: used **5 magnets** on the drive wheel (not 1) with a reed switch for adequate resolution on this class of machine — adopted for `profiles/kuipers_aquarower.h`'s `MAGNETS_PER_REV`
+     - Real-world data point: used **5 magnets** on the drive wheel (not 1) with a reed switch for adequate resolution on this class of machine — initially adopted for the Kuipers profile; the logged sessions of 2026-10-15 showed the AquaRower's stock reed gives 1 pulse per turn, so the preset uses 1
 - Notes:
      - The repo is a React/Firebase web dashboard only — no ESP32 firmware source is actually in the repo, just a README description of one
      - Stroke/SPM detection is a simple fixed-threshold + timer heuristic, no physics model — less sophisticated than what's already implemented here, so no algorithmic upgrade from this one
