@@ -154,7 +154,7 @@ supply. Don't use `DO0`/`DO1` (outputs).
 - **Main battery**: a separate 2-pin JST `Battery` connector + `Battery
   Switch` + onboard charge circuit (`CHG`/`DONE` LEDs) exists for running
   the board off a LiPo instead of USB-C. Distinct from the RTC coin cell.
-  Not part of the current USB-C-powered install.
+  Current install runs on a 250 mAh LiPo here, charged over USB-C.
   **No battery level is readable by firmware on either board** — confirmed
   from both boards' schematics (CS8501 charger IC on both; its `CHRG`/
   `STDBY`/`DONE` status pins drive LEDs directly, no GPIO fan-out). The 7"

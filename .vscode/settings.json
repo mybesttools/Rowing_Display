@@ -1,3 +1,4 @@
 {
-    "cmake.sourceDirectory": "/Users/mike/source/Rowing_Display/firmware/lib/ESP32_Display_Panel"
+    "cmake.sourceDirectory": "/Users/mike/source/Rowing_Display/firmware/lib/ESP32_Display_Panel",
+    "sonarlint.pathToCompileCommands": "${workspaceFolder}/compile_commands.json"
 }

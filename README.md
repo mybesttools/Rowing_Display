@@ -15,7 +15,11 @@ tunable on the device under Settings, see Hardware.md):
 Two board options, same UI/pipeline on both:
 
 - Waveshare ESP32-S3-Touch-LCD-7 (800×480, dev board)
-- Waveshare ESP32-S3-Touch-LCD-5 (800×480, compact, onboard battery)
+- Waveshare ESP32-S3-Touch-LCD-5 (800×480, compact)
+
+Both boards have a LiPo battery connector with an onboard charger. The 5"
+also has an RTC chip (PCF85063) with a CR927 coin-cell holder to keep the
+clock across power cycles (not used by the firmware yet).
 
 ## What it does
 
