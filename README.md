@@ -1,5 +1,7 @@
 # Rowing Display
 
+![The 5" display mounted on a Kuipers AquaRower, mid-session](hardware/in-action.jpg)
+
 ESP32-based replacement console for home rowing machines: a color touch
 display that replaces the stock LCD, reading stroke data from the
 machine's own flywheel sensor and broadcasting live metrics over Bluetooth
