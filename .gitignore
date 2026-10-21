@@ -7,3 +7,4 @@ scratchpad/higgsfield/
 .DS_Store
 logs/
 scratchpad/
+compile_commands.json
