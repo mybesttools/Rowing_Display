@@ -4,7 +4,7 @@
 
 My Kuipers AquaRower is a lovely machine: wooden rails, a big clear tank, and the sound of water every stroke. Its monitor was the weak spot: a small, low-contrast LCD, and the only way to get data off it was over Bluetooth into the FitShow app. So I built a replacement: a 5" colour touchscreen that reads the rower's own sensor, works out split, stroke rate, watts and distance, and shows a small rower on a lake at sunset who rows along with you.
 
-This post covers how it went: the hardware, the scene, the reed-switch bug that took the longest to fix, and how I calibrated it against the original monitor. My Dunlop Air Rower is next: full support for it, including its own 3D-printed case, is coming in a future release.
+This post covers how it went: the hardware, the scene, the reed-switch bug that took the longest to fix, and how I calibrated it against the original monitor. My Dunlop Air Rower is next: full support for it, including its own 3D-printed case, is coming in a future release. The firmware, wiring notes and case files are all on [GitHub](https://github.com/mybesttools/Rowing_Display).
 
 ## The hardware
 
@@ -125,4 +125,6 @@ That part works today. Making apps genuinely good to use is the next stage.
 - **Smoother animation.** More stroke frames won't fit in PSRAM, so the next gain has to come from making each frame cheaper.
 - **Workouts on the device:** intervals, target splits, and a pace boat in the lake scene to race against.
 
-The code is GPL-3.0. The repo has build instructions, the wiring notes in `Hardware.md`, and the 3D-printable case.
+## Get the code
+
+Everything is on GitHub: **[mybesttools/Rowing_Display](https://github.com/mybesttools/Rowing_Display)**. The firmware is GPL-3.0, and the repo has build instructions, the wiring notes in `Hardware.md`, and the STL files for the 3D-printed case.
