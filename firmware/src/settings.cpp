@@ -2,6 +2,8 @@
 
 #include <Preferences.h>
 
+#include <cstring>
+
 #include "freertos/FreeRTOS.h"
 
 namespace settings {
@@ -11,11 +13,23 @@ namespace {
 constexpr char kNamespace[] = "rowing";
 constexpr char kKey[] = "settings";
 // Bump when Settings' layout changes; a mismatched blob falls back to defaults.
-constexpr uint8_t kVersion = 1;
+constexpr uint8_t kVersion = 2;
 
 struct Stored {
     uint8_t version;
     Settings s;
+};
+
+// Version 1: Settings before `background` was added. Still loaded, so an
+// update keeps the user's calibration.
+struct StoredV1 {
+    uint8_t version;
+    cfg::MachineType machine;
+    cfg::SensorType sensor;
+    cfg::PulseMode pulseMode;
+    uint8_t expanderPin;
+    cfg::MachineParams machineParams;
+    cfg::SensorParams sensorParams;
 };
 
 Settings g_current;
@@ -52,6 +66,7 @@ Settings defaults(cfg::MachineType machine, cfg::SensorType sensor) {
         defaultExpanderPin(),
         cfg::machinePreset(machine),
         cfg::sensorPreset(sensor),
+        "",
     };
 }
 
@@ -62,12 +77,15 @@ void begin() {
     if (!prefs.begin(kNamespace, true)) {
         return; // nothing saved yet
     }
+    const size_t len = prefs.getBytesLength(kKey);
     Stored stored{};
-    if (prefs.getBytesLength(kKey) == sizeof(stored)) {
-        prefs.getBytes(kKey, &stored, sizeof(stored));
-        if (stored.version == kVersion) {
-            g_current = stored.s;
-        }
+    StoredV1 v1{};
+    if (len == sizeof(stored) && prefs.getBytes(kKey, &stored, sizeof(stored)) == len && stored.version == kVersion) {
+        g_current = stored.s;
+        g_current.background[sizeof(g_current.background) - 1] = '\0';
+    } else if (len == sizeof(v1) && prefs.getBytes(kKey, &v1, sizeof(v1)) == len && v1.version == 1) {
+        g_current = Settings{v1.machine,       v1.sensor,       v1.pulseMode, v1.expanderPin,
+                             v1.machineParams, v1.sensorParams, ""};
     }
     prefs.end();
 }

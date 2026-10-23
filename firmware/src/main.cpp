@@ -1,5 +1,6 @@
 #include <Arduino.h>
 #include <cstdio>
+#include <cstring>
 
 #include "ble_ftms.h"
 #include "config.h"
@@ -19,6 +20,8 @@ uint32_t g_lastLoopMs = 0;
 uint32_t g_lastNotifyMs = 0;
 uint32_t g_lastLogMs = 0;
 uint32_t g_lastPulseMs = 0;
+// Background the scene frames were rendered with at boot.
+settings::Settings g_bootSettings;
 
 void printMetrics(const RowerMetrics& m) {
     printf(
@@ -76,6 +79,7 @@ void setup() {
     pulse_log::printf("B,%lu\n", static_cast<unsigned long>(millis()));
 
     settings::begin();
+    g_bootSettings = settings::current();
     sensor_input::begin();
     applySettings(settings::current());
 
@@ -93,6 +97,13 @@ void loop() {
     if (settings::takeSubmitted(submitted)) {
         panel_runtime::resyncDisplay(); // the NVS write stalled PSRAM
         applySettings(submitted);
+        if (strcmp(submitted.background, g_bootSettings.background) != 0) {
+            // Backgrounds are read from the SD card and rendered into the
+            // scene frames at boot only (see panel_runtime.cpp).
+            printf("settings: background changed, restarting\n");
+            delay(500);
+            esp_restart();
+        }
     }
 
     if (panel_runtime::consumeSessionStartRequested()) {

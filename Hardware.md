@@ -170,9 +170,25 @@ supply. Don't use `DO0`/`DO1` (outputs).
   CAN, not wired up in firmware) and bodge-wiring it to `VBAT` for an
   actual ADC voltage/percentage reading.
 - **TF/SD card**: slot in the top-left corner. SPI on GPIO11 (MOSI)/
-  GPIO12 (SCK)/GPIO13 (MISO), CS via CH422G EXIO4 — same SPI pins as the 7"
-  board, just with CS behind the expander instead of a raw GPIO. Not
-  currently used by the firmware.
+  GPIO12 (SCK)/GPIO13 (MISO), CS via CH422G EXIO4 (10K pull-up). The 7"
+  board is wired the same (vendor `03_SD_Test` for both boards). Used for
+  scene backgrounds, see below.
+
+### SD card backgrounds (implemented)
+
+`python3 scripts/gen_scene_background.py` crops/dithers the images listed in
+the script: the first is built into the firmware, the rest are written to
+`sd_card/backgrounds/*.bin` (56-byte header + 400×240 RGB565, 192 KB each;
+format in `firmware/src/sd_backgrounds.h`). Copy the `backgrounds` folder to
+the root of a FAT32 card. At boot `sd_backgrounds::begin()` lists the folder
+and reads the selected file into the (not yet used) 800×480 present buffer,
+so it costs no PSRAM; the scene frames are rendered from it and the card is
+unmounted. The card is only read at boot because CS needs the CH422G in
+output mode, and the 5" board's DI polling switches it to input right after.
+Picking another background in Settings saves and restarts. No card, or the
+saved file missing: built-in background. Mounting follows Waveshare's
+ESP-IDF example (`esp_vfs_fat_sdspi_mount`, `gpio_cs = -1`, CS held low on
+EXIO4).
 
 ---
 
@@ -290,6 +306,7 @@ Sensor presets and other settings:
 | Debounce (ms) | from sensor type | line must be quiet this long before an edge counts |
 | Each pulse is | a wheel turn | a wheel turn (strokes detected from wheel speed), a whole stroke |
 | Input terminal (5" board only) | DI1 | DI0, DI1 |
+| Background | Dusk lake (built in) | plus any `.bin` in the SD card's `/backgrounds` folder; saving a different one restarts the display. DEFAULTS leaves it alone |
 
 Deliberately not in the UI (algorithm internals, fixed in `config.h`):
 drag-fit plausibility band, drag-fit smoothing, regression point count/R²,

@@ -8,3 +8,6 @@ scratchpad/higgsfield/
 logs/
 scratchpad/
 compile_commands.json
+
+# Generated SD card content (scripts/gen_scene_background.py)
+sd_card/

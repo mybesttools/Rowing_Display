@@ -15,6 +15,8 @@ struct Settings {
     uint8_t expanderPin; // 5" board DI terminal (CH422G pin); unused elsewhere
     cfg::MachineParams machineParams;
     cfg::SensorParams sensorParams;
+    // Scene background file on the SD card (sd_backgrounds.h); "" = built-in.
+    char background[32];
 };
 
 // Factory defaults for a machine + sensor combination.

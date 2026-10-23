@@ -5,6 +5,8 @@
 #include <cstdlib>
 #include <cstring>
 
+#include "scene_background.h"
+#include "sd_backgrounds.h"
 #include "ui_theme.h"
 
 namespace settings_screen {
@@ -65,7 +67,7 @@ const NumField& field(int i) {
     return i < kMachineFieldCount ? kMachineFields[i] : kSensorFields[i - kMachineFieldCount];
 }
 
-enum DropdownId : intptr_t { kDdMachine, kDdSensor, kDdMode, kDdInput };
+enum DropdownId : intptr_t { kDdMachine, kDdSensor, kDdMode, kDdInput, kDdBackground };
 
 Settings g_edit;
 DoneCallback g_onDone = nullptr;
@@ -75,12 +77,32 @@ lv_obj_t* g_ddMachine = nullptr;
 lv_obj_t* g_ddSensor = nullptr;
 lv_obj_t* g_ddMode = nullptr;
 lv_obj_t* g_ddInput = nullptr;
+lv_obj_t* g_ddBackground = nullptr;
 
 void formatValue(char* out, size_t cap, const NumField& f, float v) {
     if (f.isFloat) {
         snprintf(out, cap, "%.3g", v);
     } else {
         snprintf(out, cap, "%d", static_cast<int>(lroundf(v)));
+    }
+}
+
+// Background dropdown: the built-in one, then the SD card's in
+// sd_backgrounds order. A saved file that's no longer on the card shows as
+// the built-in.
+uint32_t backgroundIndex(const char* file) {
+    for (int i = 0; i < sd_backgrounds::count(); i++) {
+        if (strcmp(sd_backgrounds::fileName(i), file) == 0) {
+            return static_cast<uint32_t>(i + 1);
+        }
+    }
+    return 0;
+}
+
+void buildBackgroundOptions(lv_obj_t* dd) {
+    lv_dropdown_set_options(dd, scene_background::kDefault.name);
+    for (int i = 0; i < sd_backgrounds::count(); i++) {
+        lv_dropdown_add_option(dd, sd_backgrounds::displayName(i), LV_DROPDOWN_POS_LAST);
     }
 }
 
@@ -108,6 +130,7 @@ void refresh() {
     lv_dropdown_set_selected(g_ddMachine, static_cast<uint32_t>(g_edit.machine));
     lv_dropdown_set_selected(g_ddSensor, static_cast<uint32_t>(g_edit.sensor));
     lv_dropdown_set_selected(g_ddMode, static_cast<uint32_t>(g_edit.pulseMode));
+    lv_dropdown_set_selected(g_ddBackground, backgroundIndex(g_edit.background));
 #if defined(ROWING_BOARD_LCD_5)
     lv_dropdown_set_selected(g_ddInput, g_edit.expanderPin == cfg::DI0_EXPANDER_PIN ? 0 : 1);
 #endif
@@ -156,6 +179,10 @@ void onDropdown(lv_event_t* e) {
         g_edit.expanderPin = sel == 0 ? cfg::DI0_EXPANDER_PIN : cfg::DI1_EXPANDER_PIN;
         break;
 #endif
+    case kDdBackground:
+        snprintf(g_edit.background, sizeof(g_edit.background), "%s",
+                 sel == 0 ? "" : sd_backgrounds::fileName(static_cast<int>(sel) - 1));
+        break;
     default:
         break;
     }
@@ -163,7 +190,10 @@ void onDropdown(lv_event_t* e) {
 }
 
 void onReset(lv_event_t*) {
-    g_edit = settings::defaults(g_edit.machine, g_edit.sensor);
+    // Machine/sensor defaults only; the background is a matter of taste.
+    Settings reset = settings::defaults(g_edit.machine, g_edit.sensor);
+    memcpy(reset.background, g_edit.background, sizeof(reset.background));
+    g_edit = reset;
     refresh();
 }
 
@@ -337,6 +367,11 @@ lv_obj_t* build(DoneCallback onDone) {
     for (int i = kMachineFieldCount; i < kFieldCount; i++) {
         makeNumberRow(list, i);
     }
+
+    makeSection(list, "DISPLAY");
+    g_ddBackground = makeDropdownRow(list, "Background", "more from the SD card's backgrounds folder; restarts",
+                                     "", kDdBackground);
+    buildBackgroundOptions(g_ddBackground);
 
     return screen;
 }

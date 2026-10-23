@@ -28,6 +28,7 @@ constexpr float kPi = 3.14159265f;
 constexpr float kTau = kPi * 2.0f;
 
 LGFX_Sprite* g_canvas = nullptr;
+const scene_background::Background* g_bg = &scene_background::kDefault;
 
 // ---------------------------------------------------------------------------
 // Small math/color helpers
@@ -70,11 +71,10 @@ uint16_t pack(Rgb c) {
     return static_cast<uint16_t>(((ch(c.r) & 0xF8) << 8) | ((ch(c.g) & 0xFC) << 3) | (ch(c.b) >> 3));
 }
 
-// Palette for everything drawn over the scene_background photo (dusk lake).
-constexpr Rgb kSun = rgb(0xFFE3A8);
+// Palette for everything drawn over the scene_background photo. The sun
+// glints and ripple crests take their colours from the selected background.
 constexpr Rgb kWaterMid = rgb(0x173A4C);
 constexpr Rgb kWaterDeep = rgb(0x06131C);
-constexpr Rgb kRipple = rgb(0xF2C9A0);  // sky glow reflected on the crests
 constexpr Rgb kFoam = rgb(0xE6F4F8);
 constexpr Rgb kHullLit = rgb(0xF4F7FA);
 constexpr Rgb kHullShade = rgb(0xAEBAC6);
@@ -243,7 +243,9 @@ void ball(const Camera& cam, Vec3 c, float rxM, float ryM, Rgb col) {
 
 void drawWaterDetail(const Camera& cam, float t) {
     // Sun path: broken glints on the water below the sun.
-    const float sunX = scene_background::kSunX * kSS;
+    const float sunX = g_bg->sunX * kSS;
+    const Rgb sun = rgb(g_bg->sunColor);
+    const Rgb ripple = rgb(g_bg->rippleColor);
     for (int i = 0; i < 18; i++) {
         const float z = 2.5f + 22.0f * std::pow(static_cast<float>(i) / 18.0f, 1.6f);
         float ppm = 0.0f;
@@ -252,8 +254,8 @@ void drawWaterDetail(const Camera& cam, float t) {
         const float halfLen = (0.35f + 0.25f * hash01(i + 300)) * ppm * (0.6f + 0.4f * wob);
         const float x = sunX + (hash01(i + 500) - 0.5f) * 0.5f * ppm;
         const float fade = 1.0f - static_cast<float>(i) / 30.0f;
-        if (halfLen > 1.0f) {
-            hstroke(x - halfLen, x + halfLen, p.y, 1.4f * kSS, kSun, 0.45f * fade);
+        if (halfLen > 1.0f && g_bg->glint > 0.0f) {
+            hstroke(x - halfLen, x + halfLen, p.y, 1.4f * kSS, sun, 0.45f * fade * g_bg->glint);
         }
     }
 
@@ -271,7 +273,7 @@ void drawWaterDetail(const Camera& cam, float t) {
         const float drift = 0.04f * ppm * std::sin(t * kTau + phase * 1.7f);
         const float halfLen = (0.08f + 0.20f * hash01(i * 4 + 4)) * ppm * (0.55f + 0.45f * a);
         const float width = std::max(1.0f, 0.020f * ppm);
-        hstroke(sx + drift - halfLen, sx + drift + halfLen, sy, width, kRipple, 0.10f + 0.32f * a);
+        hstroke(sx + drift - halfLen, sx + drift + halfLen, sy, width, ripple, 0.10f + 0.32f * a);
     }
 }
 
@@ -463,13 +465,13 @@ void drawOar(const Camera& cam, const Pose& p, int s, float t) {
             const float u = static_cast<float>(i) / 4.0f;
             const Vec3 c = vlerp(neck, tip, u);
             const float wob = 0.5f + 0.5f * std::sin(t * kTau * 3.0f + static_cast<float>(i) * 2.1f);
-            ball(cam, {c.x, 0.0f, c.z}, 0.07f + 0.03f * wob, 0.018f, mix(kRipple, kFoam, 0.4f + 0.4f * wob));
+            ball(cam, {c.x, 0.0f, c.z}, 0.07f + 0.03f * wob, 0.018f, mix(rgb(g_bg->rippleColor), kFoam, 0.4f + 0.4f * wob));
         }
     } else {
         const Vec3 q[4] = {neck + across * 0.06f, tip + across * 0.11f, tip - across * 0.11f, neck - across * 0.06f};
         convex3(cam, q, 4, kAccent);
         // Faint drip rings on the water under a raised blade.
-        ball(cam, {p.blade[s].x, 0.0f, p.blade[s].z}, 0.10f, 0.02f, mix(kWaterMid, kRipple, 0.35f));
+        ball(cam, {p.blade[s].x, 0.0f, p.blade[s].z}, 0.10f, 0.02f, mix(kWaterMid, rgb(g_bg->rippleColor), 0.35f));
     }
 }
 
@@ -518,7 +520,7 @@ void drawRower(const Camera& cam, const Pose& p) {
     ball(cam, p.head + Vec3{0, 0, -0.03f}, 0.115f, 0.13f, kSkin);
     ball(cam, p.head + Vec3{0, 0.03f, -0.05f}, 0.118f, 0.11f, kHair);
     // Cap brim edge catching the light.
-    ball(cam, p.head + Vec3{-0.03f, 0.07f, -0.06f}, 0.05f, 0.025f, mix(kHair, kSun, 0.25f));
+    ball(cam, p.head + Vec3{-0.03f, 0.07f, -0.06f}, 0.05f, 0.025f, mix(kHair, rgb(g_bg->sunColor), 0.25f));
 }
 
 // Pixel-doubles the 400×240 photo into the canvas; downsampleInto() then
@@ -527,7 +529,7 @@ void drawBackground() {
     static_assert(scene_background::kWidth * kSS == kCW && scene_background::kHeight * kSS == kCH, "background size");
     uint16_t* dst = pixels();
     for (int y = 0; y < scene_background::kHeight; y++) {
-        const uint16_t* src = scene_background::kPixels + static_cast<size_t>(y) * scene_background::kWidth;
+        const uint16_t* src = g_bg->pixels + static_cast<size_t>(y) * scene_background::kWidth;
         uint16_t* row = dst + static_cast<size_t>(y * kSS) * kCW;
         for (int x = 0; x < scene_background::kWidth; x++) {
             row[x * 2] = src[x];
@@ -607,9 +609,13 @@ void downsampleInto(lv_draw_buf_t* dst) {
 
 } // namespace
 
-void draw(lv_draw_buf_t* dst, float drive, float waterTime, bool recovering) {
+void setBackground(const scene_background::Background& bg) {
+    g_bg = &bg;
+}
+
+bool draw(lv_draw_buf_t* dst, float drive, float waterTime, bool recovering) {
     if (dst == nullptr || dst->data == nullptr || !ensureCanvas()) {
-        return;
+        return false;
     }
 
     drive = clamp01(drive);
@@ -621,6 +627,7 @@ void draw(lv_draw_buf_t* dst, float drive, float waterTime, bool recovering) {
     drawScene(waterTime, drive, recovering);
     downsampleInto(dst);
     lv_draw_buf_flush_cache(dst, nullptr);
+    return true;
 }
 
 void releaseCanvas() {

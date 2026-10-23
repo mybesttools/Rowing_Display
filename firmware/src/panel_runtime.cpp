@@ -39,6 +39,7 @@ void resyncDisplay() {}
 #include "esp_lcd_panel_rgb.h"
 #include "esp_lv_adapter_arduino.h"
 #include "rower_scene.h"
+#include "sd_backgrounds.h"
 #include "settings.h"
 #include "settings_screen.h"
 #include "ui_theme.h"
@@ -332,6 +333,10 @@ void setHomeSubtitle(const settings::Settings& s) {
 
 void onSettingsDone(const settings::Settings& inEffect) {
     setHomeSubtitle(inEffect);
+    if (strcmp(inEffect.background, settings::current().background) != 0) {
+        // The main loop saves, then restarts to load it (main.cpp).
+        lv_label_set_text(g_homeSubtitle, "Restarting to load the background...");
+    }
     showScreen(g_homeScreen);
 }
 
@@ -389,6 +394,21 @@ void buildSessionScreen() {
     if (g_present == nullptr) {
         printf("panel: 800x480 present alloc failed\n");
     }
+    // An SD card background is read into g_present: that buffer is only used
+    // once a session starts, by which time the frames are rendered and the
+    // background pixels aren't needed any more. PSRAM has no room to spare.
+    static scene_background::Background sdBackground;
+    constexpr size_t kBackgroundBytes = sizeof(uint16_t) * scene_background::kWidth * scene_background::kHeight;
+    uint16_t* sdPixels = g_present != nullptr && g_present->data_size >= kBackgroundBytes
+                             ? reinterpret_cast<uint16_t*>(g_present->data)
+                             : nullptr;
+    // Also lists the card's backgrounds for Settings, whatever is selected.
+    if (sd_backgrounds::begin(panel_runtime::ioExpanderBase(), settings::current().background, sdPixels, sdBackground)) {
+        rower_scene::setBackground(sdBackground);
+    } else {
+        rower_scene::setBackground(scene_background::kDefault);
+    }
+
     const uint32_t precomputeStartMs = millis();
     precomputeIdleWaterFrames();
     precomputeRowerFrames();
