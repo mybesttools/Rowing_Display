@@ -1,6 +1,10 @@
-# Dunlop Air Rower 750 — Hardware & Project Specs
+# Hardware notes
 
-Living hardware notes for replacing the stock console and rotation sensor with an ESP32-based color display system.
+Living notes for the ESP32 console that replaces the stock monitor. Two
+machines are in scope: the **Dunlop Air Rower 750** (air fan) and the
+**Kuipers AquaRower** (water tank). The console in daily use is the 5"
+board on the Kuipers, reading that machine's stock reed switch. Build
+commands are in the root README; the source map is in `firmware/README.md`.
 
 ## Machine (stock)
 
@@ -37,7 +41,7 @@ No reliable /500 m split or power model expected from the stock unit. Distance/c
 
 Our replacement UI mirrors this layout in interactive mode (split prominent, SPM/meters/watts/time tiles, animated stern scene behind low-opacity tiles) but uses a flywheel-physics model for split/watts instead of the stock approximations.
 
-### Stock sensing (to be removed)
+### Stock sensing
 
 Typical for this machine class (confirm on open-up):
 
@@ -45,37 +49,40 @@ Typical for this machine class (confirm on open-up):
 - One or more magnets on the flywheel / fan
 - Cable to the rear of the console
 
-**Decision:** full replacement of sensor and monitor — do not reuse the stock reed or LCD.
+**Decision for this machine:** replace the sensor and the monitor. The Kuipers install kept that machine's stock reed and replaced only the monitor (see Project goals).
 
 ---
 
 ## Project goals
 
-1. Remove stock console and stock rotation sensor completely.
-2. Install a **Hall-effect** rotation sensor + magnet(s) on the air fan.
-3. Install an **ESP32** processing unit with a **color TFT** as the primary console.
-4. Stream live metrics to a phone/tablet app (BLE preferred).
-5. Console must work **without** a phone present.
+1. Replace the stock console with an on-device color display. **Done** (Waveshare 5" and 7" boards).
+2. Read the flywheel sensor. **Done on the Kuipers with its stock reed** (one pulse per wheel turn, strokes detected from speed-up and slow-down). A Hall sensor is still the plan for a cleaner edge; it is not fitted.
+3. Derive split, power, distance, rate, and calories on the device. **Done.** The Kuipers preset is calibrated against its stock monitor. The Dunlop preset is not.
+4. Stream live metrics to phone apps over BLE FTMS, and accept Start / Stop / Pause / Reset. **Done.** There is no companion app; history is the TCX file on the SD card.
+5. A full session must work with no phone present. **Done.**
 
 ---
 
 ## Target architecture
 
 ```
-Fan cage: magnet(s) → Hall sensor → ESP32 → color TFT (primary UI)
+Flywheel reed or Hall → ESP32-S3 → 800×480 touch panel (primary UI)
                               ↓
-                         BLE → phone / tablet app
+                    BLE FTMS → phone app
+                              ↓
+                    SD card ← session TCX, scene backgrounds
                               ↑
-                         USB-C 5 V power
+                    USB-C or the board's LiPo
 ```
 
 | Layer | Role |
 |-------|------|
-| Hall + magnet | Revolution pulses |
-| ESP32 | Timing, stroke/metrics math, display, BLE |
-| Color TFT | Always-on primary readout |
-| App | Mirror, history, calibration, workouts |
-| USB-C 5 V | Power (not the old battery tray) |
+| Reed (Kuipers today) or Hall | One pulse per wheel turn, or one pulse per stroke if Settings says so |
+| ESP32-S3 | Timing, stroke and metrics math, display, BLE, session file |
+| 800×480 panel | Always-on primary readout |
+| FTMS | Live data and session control for existing fitness apps |
+| SD card | TCX when the session ends; optional scene backgrounds |
+| USB-C or LiPo | Power. No battery gauge on either board |
 
 ---
 
@@ -132,8 +139,9 @@ Firmware facts (`firmware/src/sensor_input.cpp`):
   pin levels in **input** mode — in output mode it reads back its own latch
   (always 1). The board init leaves IO0-7 all-output, so the firmware calls
   `enableAllIO_Input()` once after the display is up, as Waveshare's sample
-  does. Nothing writes the expander after init, so display/backlight/touch
-  are unaffected (verified on hardware 2026-10-15).
+  does. Mounting the SD card (backgrounds at boot, and the session save)
+  borrows the expander back into output mode and returns it to input
+  afterwards; see "Session files on the SD card".
 - Touch (GT911) and the CH422G share I2C host 0 (SCL 9 / SDA 8). LVGL reads
   touch from its own task under `esp_lv_adapter_lock()`; DI reads take the
   same lock, otherwise they collide and hit the CH422G driver's 10 ms
@@ -148,9 +156,11 @@ supply. Don't use `DO0`/`DO1` (outputs).
 
 ### Other 5" board connectors (not wired for the sensor, noted for later)
 
-- **RTC battery**: a CR927 coin-cell holder (labeled `RTC`) backs a
-  PCF85063 RTC chip, keeping time across power cycles. Optional — not
-  currently used by the firmware (no RTC driver wired up).
+- **RTC battery**: a CR927 coin-cell holder (labeled `RTC`) backs the
+  PCF85063. `rtc_clock.cpp` reads it at boot. The home-screen clock and
+  session file names use that time. Set it with `scripts/set_clock.py` or
+  from Settings → Clock & Wi-Fi. The 7" board has no RTC in this firmware.
+  See "Clock over Wi-Fi, time zone" for the battery-failed indication.
 - **Main battery**: a separate 2-pin JST `Battery` connector + `Battery
   Switch` + onboard charge circuit (`CHG`/`DONE` LEDs) exists for running
   the board off a LiPo instead of USB-C. Distinct from the RTC coin cell.
@@ -163,12 +173,11 @@ supply. Don't use `DO0`/`DO1` (outputs).
   doesn't even have that. Every raw GPIO on both boards is already claimed
   (display/touch/SD/RS485/CAN/USB, plus the RTC interrupt on the 5" board's
   `GPIO6` — the pin the 7" uses for "Sensor AD"). Showing battery level
-  would need a hardware modification: either an external low-battery
-  threshold circuit into the 5" board's still-unused `DI1` terminal (binary
-  low-battery flag only, reuses the same CH422G read already built for the
-  reed sensor), or sacrificing one of this project's unused GPIOs (RS485/
-  CAN, not wired up in firmware) and bodge-wiring it to `VBAT` for an
-  actual ADC voltage/percentage reading.
+  would need a hardware modification. `DI0` and `DI1` are the sensor
+  terminals (the reed uses one of them; Settings picks which), so there is
+  no free digital input left for a low-battery flag. A voltage reading
+  means sacrificing an unused GPIO (RS485/CAN, not used by this firmware)
+  and wiring it to a divider on `VBAT`.
 - **TF/SD card**: slot in the top-left corner. SPI on GPIO11 (MOSI)/
   GPIO12 (SCK)/GPIO13 (MISO), CS via CH422G EXIO4 (10K pull-up). The 7"
   board is wired the same (vendor `03_SD_Test` for both boards). Used for
@@ -181,11 +190,24 @@ the script: the first is built into the firmware, the rest are written to
 `sd_card/backgrounds/*.bin` (56-byte header + 400×240 RGB565, 192 KB each;
 format in `firmware/src/sd_backgrounds.h`). Copy the `backgrounds` folder to
 the root of a FAT32 card. At boot `sd_backgrounds::begin()` lists the folder
-and reads the selected file into the (not yet used) 800×480 present buffer,
-so it costs no PSRAM; the scene frames are rendered from it and the card is
-unmounted. The card is only read at boot because CS needs the CH422G in
+and reads the selected file into the 800×480 present buffer. That buffer
+is only needed once a session starts, so the background costs no extra
+PSRAM; the scene frames are rendered from it and the card is unmounted. The card is only read at boot because CS needs the CH422G in
 output mode, and the 5" board's DI polling switches it to input right after.
-Picking another background in Settings saves and restarts. Users make their
+Picking another background in Settings saves and restarts.
+
+**Photos converted on the display** (`image_import.cpp`, `background_convert.cpp`):
+at boot, before listing `/backgrounds`, every `.jpg`/`.jpeg` in `/images`
+without a matching `/backgrounds/<slug>.bin` is converted: decoded with the
+ESP32-S3 ROM TJpgDec (no flash cost; baseline JPEG only) at the coarsest
+1/2^n scale that keeps ≥ 640×384, into PSRAM (frames aren't allocated yet
+at that point), then the same steps as `background_tools.py`: mirror-line
+waterline guess (or `_hNN` in the file name), brightest-sky sun column,
+crop, box-filter resample (Lanczos in Python), sky colours, Floyd–Steinberg
+to RGB565, glint 0.6. Checked on the host against the Python reference on
+six photos: identical waterline/sun guesses, colours within 1/255, mean
+pixel difference ~3/255. PNG is skipped: it must be decoded whole (~4 MB
+RGBA for 1328×800), too much for the PSRAM left. Up to 16 photos per boot. Users make their
 own with `scripts/make_background.py` (waterline detected from the
 reflection's mirror symmetry, checked in a preview PNG; README "Backgrounds"). No card, or the
 saved file missing: built-in background. Mounting follows Waveshare's
@@ -198,11 +220,10 @@ EXIO4).
 
 | Item | Spec / choice |
 |------|----------------|
-| MCU | **ESP32-S3** preferred (PSRAM helpful for LVGL) |
-| Fallback | ESP32 / ESP32-C3 if UI is lighter |
-| Display | 3.2–3.5" SPI color TFT (e.g. ILI9488 / ST7796 class) |
-| UI toolkit | LVGL (recommended) |
-| Mount | Replace stock console on existing stalk; custom plate/enclosure |
+| MCU | **ESP32-S3** on the Waveshare boards below (PSRAM required for the RGB framebuffers) |
+| Display | Waveshare 5" and 7", both 800×480 RGB touch. The 3.2–3.5" SPI TFT option was not built |
+| UI toolkit | LVGL |
+| Mount | 5" board in a printed case on the Kuipers stalk |
 | Environment | Sweat-resistant enclosure; conformal coat optional |
 
 ### Power
@@ -211,16 +232,19 @@ EXIO4).
 - Color TFT + ESP32 (BLE/Wi‑Fi) is not suitable for the stock AA/AAA tray.
 - Regulate to 3.3 V for MCU/Hall as required by the module.
 
-### Optional later
+### On the boards in use
 
-- Capacitive touch on TFT
-- Physical buttons (reset / units / backlight)
-- Wi‑Fi for OTA updates
-- FTMS BLE profile for third-party fitness apps
+- Capacitive touch runs Settings and session start/stop. There are no physical buttons.
+- Wi-Fi is used for NTP, then turned off. There is no OTA.
+- FTMS Indoor Rower is implemented. See "FTMS data and app control".
 
-### Candidate board check: Waveshare ESP32-S3 7" Capacitive Touch
+### Waveshare 7" and 5" boards
 
-Board under consideration:
+Both are build targets. The 7" (`esp32-s3-devkitc-1`) was the first panel.
+The 5" (`esp32-s3-lcd5`) is the one mounted on the Kuipers, chosen for size
+and the onboard battery. The assessment below is the original 7" check.
+
+Board:
 
 - Waveshare ESP32-S3 7-inch capacitive touch display dev board
 - 800x480 LCD, 5-point touch, Wi-Fi + BLE
@@ -234,16 +258,16 @@ Assessment for this rowing project:
 - **Firmware complexity:** Higher than SPI TFT modules. These RGB touch boards often need vendor/BSP-specific display+touch init.
 - **Environment risk:** Large glossy panels can be harder to read in bright light and need sweat splash protection.
 
-Recommendation:
+Original recommendation, since followed (the 7" was bought; the 5" followed for size):
 
-- **Buy** for this project if your priority is a premium, easy-to-read on-device console and you accept extra integration effort.
-- **Skip for first prototype if** you want fastest bring-up; a 3.5" SPI TFT is easier for initial sensor/metrics validation.
+- **Buy** for a premium, easy-to-read on-device console, accepting the extra integration effort.
+- A 3.5" SPI TFT would have been the faster first prototype. That path was not taken.
 
 Current project note:
 
 - Power supply budget is not a constraint, so the higher panel current draw is acceptable.
 
-Pre-buy checklist:
+Original pre-buy checklist, satisfied by both SKUs:
 
 - Confirm the exact Waveshare SKU has:
      - ESP32-S3 variant with enough PSRAM for your UI plan.
@@ -257,14 +281,16 @@ Pre-buy checklist:
 
 ## Firmware responsibilities (ESP32)
 
-1. **Pulse capture** — timestamp Hall edges (ISR / hardware timer).
-2. **RPM** — from pulse period and magnets-per-rev.
-3. **Stroke detection** — flywheel speed rises on drive, decays on recovery → stroke count & SPM.
-4. **Session metrics** — elapsed time, strokes, SPM.
-5. **Distance & split** — integrate calibrated factor → meters and time/500 m.
-6. **Optional watts** — from spin-down / drag between strokes.
-7. **Local UI** — primary always-on display.
-8. **BLE** — stream smoothed metrics (~5–10 Hz), not raw pulse rate.
+All of these are in `firmware/src` (map in `firmware/README.md`):
+
+1. **Pulse capture** — GPIO interrupt on the 7" board; polled CH422G digital input on the 5".
+2. **RPM** — from pulse period and pulses per wheel turn.
+3. **Stroke detection** — flywheel speed rises on the drive and decays on the recovery. Settings can instead treat each pulse as one stroke.
+4. **Session metrics** — time, strokes, rate, distance, split, watts, averages, calories. Pause freezes the session.
+5. **Local UI** — home screen, Settings, and the session screen over the stern scene.
+6. **FTMS** — Indoor Rower Data at 5 Hz (two notifications per update) and control-point Start / Stop / Pause / Reset.
+7. **Session file** — TCX on the SD card when the session ends.
+8. **Clock** — RTC on the 5" board; NTP over Wi-Fi when a network is saved.
 
 ### Calibration
 
@@ -343,23 +369,16 @@ and a plausibility range, then blended into a running drag factor via EMA.
 Power is `P = k·ω³`; linear speed is `v = (k/C)^(1/3)·ω`, the same
 cube-root flywheel-to-"boat" scaling Concept2-style ergometers use.
 
-**Two constants still need real calibration** (currently placeholders in
-`firmware/include/config.h`, prominently flagged in comments there):
+**Calibration** is the per-machine table in `firmware/include/machine_presets.h`
+(overridable on the device; see "On-device settings"). The Kuipers preset
+was tuned on 2026-10-15 against the original monitor: 354 m in 2:00, about
+73 W at 29 spm, 1 pulse per wheel turn, C = 2.80. Inertia 1.9 is chosen so
+the fitted recovery slope lands near k = 0.026. It is not a measured moment
+of inertia. Dunlop inertia (0.10) and C (3.7) are still placeholders.
 
-- `FLYWHEEL_INERTIA_KGM2` — the Dunlop fan flywheel's actual moment of
-  inertia (kg·m²). Scales every fitted drag factor and therefore every watts
-  number. Needs a physical measurement (bifilar pendulum swing test) or
-  iterative tuning once real numbers are on screen.
-- `BOAT_SCALING_CONSTANT` (`C`) — empirical, per-machine, not derivable from
-  first principles. Tune against known-distance test pieces, same as the
-  flat `METERS_PER_REV` constant it replaced.
-
-Validated so far: a synthetic unit test (`firmware/test/test_logic/test_main.cpp`)
-confirms the OLS fit recovers a known analytically-constructed drag factor;
-on real hardware (hand-waved magnet, not yet a mounted flywheel) the fitted
-drag factor visibly locks onto a stable value across strokes once a few
-clean recovery phases are seen, and stays put through further noisy input —
-the R²/plausibility gating is doing its job.
+A synthetic unit test (`firmware/test/test_logic/test_main.cpp`) confirms
+the OLS fit recovers a known drag factor. On the Kuipers, stroke count
+matched a hand count on 2026-10-15.
 
 ### Session averages, calories, pause (implemented)
 
@@ -392,12 +411,15 @@ notifications sent, 468/468 data packets well-formed during a simulated
 ### Session files on the SD card (implemented)
 
 `session_log.cpp` samples the session once per second (PSRAM, up to 4 h)
-and, when it ends (X button or an app's Stop), writes
-`/sessions/<UTC start>.tcx` on the card: one lap with time, distance,
+and, when it ends (the X button, serial `E`, or an app's Stop), writes
+`/sessions/<local date>_<time>.tcx` on the card: one lap with time, distance,
 calories, average cadence and average watts, and a trackpoint per second
 (distance, cadence, watts). Sport is "Other" (TCX has no rowing); set the
-type after uploading. Sessions without a stroke aren't written. The banner
-says "saved <file>", "no SD card" or "saving failed".
+type after uploading. Sessions without a stroke aren't written. When an app
+or `E` ends the session, the session screen shows "STOPPED" and "saved
+\<file\>", "no SD card, not saved", or "saving failed". The on-screen X
+returns to the home screen before that banner is drawn, so the save result
+is in the serial log.
 
 Card access at run time (`sd_card.cpp`) on the 5" board pauses DI polling
 and puts the CH422G in output mode for the mount (DI latches low first;
@@ -414,7 +436,8 @@ clock files are named `session-NNN.tcx` and timestamped from 2000-01-01. The
 7" board has no RTC known to this firmware: set the clock after each boot.
 
 **USB serial commands** (one per line): `T<unix seconds>` sets the clock,
-`S`/`E` start/end a session, `P` is one sensor pulse.
+`S`/`E` start/end a session, `P` is one sensor pulse, `W` scans Wi-Fi,
+`Y` syncs the clock with the saved network.
 `scripts/sim_row.py --port … --strokes 20` rows a simulated session with
 them, for testing at a desk.
 
@@ -478,11 +501,18 @@ screen clock shows "clock battery?" and the Clock & Wi-Fi page says so.
 
 ### On-device UI (implemented)
 
-`firmware/src/panel_runtime.cpp` now renders a real LVGL screen instead of
-the earlier raw-`drawBitmap` bar-graph placeholder: large SPLIT time up top
-(the one number that matters mid-stroke), a row of SPM/METERS/WATTS tiles,
-and a smaller TIME/STROKES row underneath. Confirmed live on hardware: all
-fields update in real time as the Hall sensor pulses.
+`firmware/src/panel_runtime.cpp` draws two LVGL screens.
+
+The home screen is the title "Let's get rowing!", the machine and sensor,
+START SESSION, SETTINGS, and the clock (5" board, when the RTC is set).
+
+The session screen is the precomputed stern scene (`rower_scene`: the photo
+background, the rower, and the water, blitted at 800×480) with tiles over
+it. Top band: SPLIT /500m, the session average split and rate, SPM, WATTS.
+Bottom band: TIME, STROKES, METERS, KCAL. With the pace boat on, a label
+under the top band shows the target split and the gap in metres. The X
+ends the session and returns home. An app can also pause the session; the
+banner then reads PAUSED. There is no pause button on the panel.
 
 The LVGL↔`esp_display_panel` bridge (`firmware/src/esp_lv_adapter_arduino.*`)
 is adapted from Waveshare's own `10_lvgl_v9_demo` example for this exact
@@ -496,22 +526,19 @@ screen-tear issue this board's own docs warn about with a naive
 single-buffer RGB setup, which our earlier raw-`drawBitmap` code was
 running without.
 
-Next layer, not yet built: the boat/water-scene visualization discussed
-alongside this metrics screen — deferred until after the metrics
-foundation (this screen) was solid, per the agreed scoping.
-
 ---
 
-## App (planned)
+## Phone apps
 
-| Item | Direction |
-|------|-----------|
-| Link | BLE GATT custom service first |
-| Role | Live mirror, history, targets, calibration |
-| Constraint | iOS background BLE is stricter — design for foreground workout use first |
-| Later | FTMS rower service for broader app compatibility |
+FTMS Indoor Rower is the phone link. See "FTMS data and app control" for
+the packet split, the energy fields, and the control point. A phone is not
+required for a session.
 
-Example live fields: `t`, `strokeRate`, `split`, `distance`, `watts`, `drag`.
+There is no companion app in this repo. History is the TCX file on the SD
+card. The target that exists on the device is the pace boat. Calibration
+is the Settings screen. Apps that speak FTMS can read the rower data and
+send Start, Stop, Pause, and Reset. That path was checked on 2026-10-23
+from a Mac with a bleak client, not yet against a particular training app.
 
 ---
 
@@ -593,36 +620,23 @@ Status:
 
 | Decision | Choice |
 |----------|--------|
-| Machine | Dunlop Air Rower 750 |
-| Stock sensor | **Replace** (do not reuse reed) |
-| Stock monitor | **Replace** (do not reuse LCD) |
-| New sensor | Hall + magnet(s), start with 1 PPR |
-| MCU | ESP32 family (S3 preferred) |
-| Primary UI | On-device color TFT |
-| Phone required? | **No** for a usable workout |
-| Power | USB-C 5 V |
+| Machines | Dunlop Air Rower 750 and Kuipers AquaRower, selectable in Settings. Daily use is the Kuipers |
+| Kuipers sensor | Stock reed, one pulse per wheel turn, strokes from flywheel speed. Hall replacement still open |
+| Dunlop sensor | Hall + one magnet is still the plan. That preset is uncalibrated |
+| Stock monitor | Replaced on both |
+| MCU and display | ESP32-S3, Waveshare 5" (daily) and 7", both 800×480 touch |
+| Phone required? | No. FTMS when a phone is present |
+| Power | USB-C, or the board's LiPo. No battery gauge |
+| Clock | 5" RTC, plus NTP when a Wi-Fi network is saved |
 
-## Open / to confirm on hardware
+## Still open
 
-- [ ] Exact Hall part number and output type (push-pull vs open-drain)
-- [ ] Final TFT size vs stalk clearance / handle path
-- [ ] Magnet mount location on this fan geometry
-- [ ] Console mechanical adapter dimensions
-- [ ] Pin map (Hall GPIO, SPI TFT, any buttons)
-- [ ] BLE UUID / packet format
-- [ ] Distance model (simple meters-per-rev vs drag-factor spin-down)
+- Hall sensor in place of the Kuipers reed, and a part choice (push-pull vs open-drain) when that happens.
+- Dunlop inertia and boat constant, against a known distance.
+- Battery voltage. Both boards need a hardware modification before the firmware can read it.
+- A training app (Kinomap, EXR, or similar) against the FTMS service. The bleak check covered the packets and the control point. A saved TCX passes Garmin's schema; uploading one to Strava, Intervals.icu, or Garmin Connect is still to do.
 
----
-
-## Build order
-
-1. Hall + magnet + ESP32 — serial log of pulse intervals.
-2. Confirm **one clean pulse per revolution** (hand spin + rowing).
-3. SPM + elapsed time on serial.
-4. TFT: SPM, time, stroke count.
-5. Permanent brackets + cable routing; remove stock console/sensor.
-6. Distance/split after first calibration.
-7. BLE streaming + app.
+The original bring-up list (pulse log, on-screen metrics, brackets, distance model, BLE) is done for the Kuipers and the 5" board. Pin map, panel size, and the drag-factor distance model are in the sections above.
 
 ---
 
@@ -766,3 +780,4 @@ These are the strongest reusable codebases found for this exact stack: ESP32 + r
 | 2026-08-11 | Updated Waveshare 7-inch board recommendation to "buy" since power supply constraints are not a concern. |
 | 2026-08-13 | Replaced the placeholder rpm²-based metrics model with a flywheel-physics model (drag factor via recovery-phase regression, `P = k·ω³`, cube-root distance scaling), clean-room inspired by openrowingmonitor and ESPRowingMonitor (see "Reusable GitHub repositories" and "Metrics/physics model" above). Added ESPRowingMonitor to the repo shortlist. |
 | 2026-08-13 | Two machines confirmed in scope: the Dunlop Air Rower (flywheel, Germany) and a Kuipers AquaRower (water resistance, adjustable 12-21L tank, Amsterdam) — added a rower-profile split so firmware/calibration constants can target either. |
+| 2026-10-23 | Docs caught up with the firmware: RTC, scene, FTMS, TCX, pace boat, Wi-Fi clock, and the 5" reed path are implemented. The Dunlop preset and a Hall swap on the Kuipers are still open. |

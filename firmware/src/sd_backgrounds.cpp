@@ -9,6 +9,7 @@
 
 #include <algorithm>
 
+#include "image_import.h"
 #include "sd_card.h"
 #endif
 
@@ -107,6 +108,7 @@ bool begin(void* expanderBase, const char* wanted, uint16_t* pixels, scene_backg
 #else
     bool loaded = false;
     if (sd_card::mount(expanderBase)) {
+        image_import::convertNew(); // photos in /images -> /backgrounds
         listDir();
         for (int i = 0; i < g_count && wanted != nullptr && pixels != nullptr; i++) {
             if (strcmp(g_entries[i].file, wanted) == 0) {

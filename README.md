@@ -19,18 +19,28 @@ Two board options, same UI/pipeline on both:
 - Waveshare ESP32-S3-Touch-LCD-7 (800×480, dev board)
 - Waveshare ESP32-S3-Touch-LCD-5 (800×480, compact)
 
-Both boards have a LiPo battery connector with an onboard charger. The 5"
-also has an RTC chip (PCF85063) with a CR927 coin-cell holder to keep the
-clock across power cycles (not used by the firmware yet).
+Both boards have a LiPo battery connector with an onboard charger. Neither
+board exposes battery voltage to the MCU, so the firmware has no battery
+gauge. The 5" board's PCF85063 (CR927 cell) keeps the clock across power
+cycles. The firmware reads it at boot for the home-screen clock and for
+session file names, and sets it from USB (`scripts/set_clock.py`) or from
+Wi-Fi NTP under Settings. The 7" board has no RTC; set the clock after
+each boot (USB or Wi-Fi).
 
 ## What it does
 
-- Reads the flywheel's reed/Hall sensor and derives rpm, stroke rate,
+- Reads the flywheel's reed or Hall sensor and derives rpm, stroke rate,
   drive/recovery phase, split, power, and distance from a flywheel-physics
   model (drag factor fitted per session from the recovery-phase decay).
-- Drives an LVGL UI: live metric tiles over a procedurally animated
-  stern-view rowing scene synced to the actual drive/recovery phase.
-- Notifies live metrics over BLE FTMS (Indoor Rower Data).
+  Machine, sensor, and stroke-detection settings are editable on the device
+  and stored in NVS.
+- Drives an LVGL UI: live metric tiles (split, rate, power, time, strokes,
+  distance, calories, session averages) over a precomputed stern-view scene
+  synced to the stroke. A pace boat can row a target split in the next lane.
+  Extra scene photos live on the SD card.
+- Notifies live metrics over BLE FTMS (Indoor Rower Data, two 12-byte
+  packets). Start, Stop, Pause, and Reset from an app act on the session.
+- Saves each session to the SD card as `/sessions/<date>_<time>.tcx`.
 
 See [Hardware.md](Hardware.md) for sensor wiring, board pinouts, and the
 physics model's derivation/attribution. See
@@ -65,10 +75,19 @@ activity type to rowing.
 
 ## Backgrounds
 
-The scene behind the rower is a photo. One is built in; more can go on a
-FAT32 SD card in a `backgrounds` folder (up to 16) and be picked under
-Settings > DISPLAY > Background. To make your own from a photo of calm water
-(no boat in the foreground), install the image libraries once:
+The scene behind the rower is a photo. The easiest way to add your own: put
+JPEG photos of calm water (no boat in the foreground) in an `images` folder
+on the SD card. At the next start the display turns each new one into a
+background in the `backgrounds` folder, named after the file
+(`home_lake.jpg` → "home lake"), and it shows up under Settings > Display.
+The waterline is guessed from the reflection; if it's off, add `_h` and the
+waterline height in percent to the name (`home_lake_h52.jpg`) and delete the
+generated `.bin` so it's made again. PNG and progressive JPEG aren't
+converted on the display; use the script below for those.
+
+One background is built in; the card's `backgrounds` folder (FAT32, up to 16
+files) holds the rest. To make them on a computer instead, with a preview to
+check the waterline, install the image libraries once:
 
 ```bash
 pip3 install numpy pillow

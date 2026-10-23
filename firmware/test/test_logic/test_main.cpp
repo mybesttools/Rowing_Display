@@ -2,6 +2,9 @@
 
 #include <unity.h>
 
+#include <vector>
+
+#include "background_convert.h"
 #include "config.h"
 #include "ftms_encoder.h"
 #include "metrics_model.h"
@@ -336,6 +339,33 @@ void test_pause_freezes_session_time_and_ignores_pulses() {
     TEST_ASSERT_EQUAL_UINT32(5u, model.metrics().elapsedSec);
 }
 
+void test_background_convert_finds_the_mirror_line() {
+    // Textured "shore" above row 120 of 300, its mirror image below: the
+    // waterline guess must land on the mirror line.
+    const int w = 400;
+    const int h = 300;
+    const int line = 120;
+    std::vector<uint8_t> rgb(static_cast<size_t>(w) * h * 3);
+    for (int y = 0; y < h; y++) {
+        const int src = y < line ? y : 2 * line - y;
+        for (int x = 0; x < w; x++) {
+            const uint8_t v = src < 0 ? 40 : static_cast<uint8_t>((x * 7 + src * 13 + (x * src) % 31) % 200 + 20);
+            uint8_t* p = &rgb[(static_cast<size_t>(y) * w + x) * 3];
+            p[0] = p[1] = p[2] = v;
+        }
+    }
+    const background_convert::Image img{rgb.data(), w, h};
+    TEST_ASSERT_FLOAT_WITHIN(0.02f, static_cast<float>(line) / h, background_convert::estimateHorizon(img));
+
+    // The output puts that line at a third of the height.
+    std::vector<uint8_t> scratch(background_convert::kOutW * background_convert::kOutH * 3);
+    std::vector<uint16_t> out(background_convert::kOutW * background_convert::kOutH);
+    const background_convert::Result r =
+        background_convert::convert(img, static_cast<float>(line) / h, 0.5f, scratch.data(), out.data());
+    TEST_ASSERT_FLOAT_WITHIN(1.0f, background_convert::kOutW * 0.5f, r.sunX);
+    TEST_ASSERT_TRUE(r.rippleColor != 0u);
+}
+
 int main(int, char **) {
     UNITY_BEGIN();
     RUN_TEST(test_metrics_model_bootstraps_drive_then_counts_stroke_after_recovery);
@@ -349,5 +379,6 @@ int main(int, char **) {
     RUN_TEST(test_ftms_status_encoding);
     RUN_TEST(test_session_averages_and_energy);
     RUN_TEST(test_pause_freezes_session_time_and_ignores_pulses);
+    RUN_TEST(test_background_convert_finds_the_mirror_line);
     return UNITY_END();
 }
