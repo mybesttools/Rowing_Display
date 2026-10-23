@@ -460,7 +460,21 @@ once. While the radio is on, the panel is re-aligned every 500 ms
 (`waitMs()` in `net_time.cpp`): Wi-Fi's PSRAM buffers
 (`CONFIG_SPIRAM_TRY_ALLOCATE_WIFI_LWIP=y` in the prebuilt Arduino IDF)
 compete with the RGB frame DMA and visibly shifted the picture. Measured:
-join ~3 s, IP 13 ms later, NTP ~0.4 s, radio off ~3.5 s after it started.
+join ~3 s, IP 13 ms later, NTP ~0.4 s, radio off ~3.5 s after it started. DHCP failed in
+about half the attempts until `WiFi.setSleep(false)` (BLE shares the radio;
+the offer was missed in modem sleep): 6/6 syncs in 2–6 s after.
+
+**Schedule:** weekly. At boot only if the clock was last set ≥ 7 days ago
+(or isn't valid), and an hourly check while the display stays on, never
+during a session. Wi-Fi changes and SYNC sync at once. The last-set time is
+an NVS key (`clockSet`), written by every clock set.
+
+**Clock battery:** its voltage can't be read: BAT1 (CR927) only feeds the
+RTC's VDD through D15/D16, and the PCF85063A has no battery-low flag. What
+is detectable is lost time: if the RTC's oscillator-stopped flag is set at
+boot although the clock had been set before, the board was fully powered
+off (no USB, LiPo switched off) without a working cell. Then the home
+screen clock shows "clock battery?" and the Clock & Wi-Fi page says so.
 
 ### On-device UI (implemented)
 
