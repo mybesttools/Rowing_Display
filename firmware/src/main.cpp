@@ -124,6 +124,7 @@ void endSession(uint32_t nowMs) {
 //   S / E            start / end a session, like START SESSION and the X
 //   P                one sensor pulse, as if from the reed (scripts/sim_row.py)
 //   W                Wi-Fi scan (results in the log)
+//   Y                clock sync with the saved Wi-Fi settings
 void pollSerialCommands(uint32_t nowMs) {
     static char line[24];
     static size_t len = 0;
@@ -140,6 +141,8 @@ void pollSerialCommands(uint32_t nowMs) {
                 endSession(nowMs);
             } else if (len == 1 && line[0] == 'W') {
                 net_time::startScan();
+            } else if (len == 1 && line[0] == 'Y') {
+                syncClock(settings::current());
             } else if (len == 1 && line[0] == 'P') {
                 const uint32_t ms = millis();
                 g_lastPulseMs = ms;

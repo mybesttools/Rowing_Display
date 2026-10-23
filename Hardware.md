@@ -449,7 +449,18 @@ the RTC with its own date maths, since `mktime()` applies the zone); the
 zone only affects local time: the home screen clock and session file
 names. TCX times stay UTC. Wi-Fi adds ~550 KB flash (61.5%) and ~25 KB
 static RAM; ~71 KB internal heap free after boot. Serial `W` scans and
-logs the networks.
+logs the networks, `Y` syncs with the saved settings.
+
+Lessons from bring-up (2026-10-23): the status shown as "status 0, reason
+0" was a station that had *joined* (STA_CONNECTED) but had no IP yet;
+Arduino only reports WL_CONNECTED after DHCP, so the message now says
+"joined, but got no IP address" in that case and the timeout is 30 s.
+`sntp_get_sync_status()` returns COMPLETED once and then resets, so read it
+once. While the radio is on, the panel is re-aligned every 500 ms
+(`waitMs()` in `net_time.cpp`): Wi-Fi's PSRAM buffers
+(`CONFIG_SPIRAM_TRY_ALLOCATE_WIFI_LWIP=y` in the prebuilt Arduino IDF)
+compete with the RGB frame DMA and visibly shifted the picture. Measured:
+join ~3 s, IP 13 ms later, NTP ~0.4 s, radio off ~3.5 s after it started.
 
 ### On-device UI (implemented)
 

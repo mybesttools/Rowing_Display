@@ -8,6 +8,7 @@
 #include <ctime>
 
 #include "esp_heap_caps.h"
+#include "esp_netif.h"
 #include "esp_sntp.h"
 #include "panel_runtime.h"
 #include "rtc_clock.h"
@@ -16,7 +17,11 @@ namespace net_time {
 
 namespace {
 
-constexpr uint32_t kConnectTimeoutMs = 15000;
+// Association plus DHCP.
+constexpr uint32_t kConnectTimeoutMs = 30000;
+// While the radio is on, Wi-Fi buffers in PSRAM compete with the RGB
+// panel's frame DMA and the picture can shift; re-align it this often.
+constexpr uint32_t kResyncEveryMs = 500;
 constexpr uint32_t kSyncTimeoutMs = 10000;
 
 struct Network {
@@ -51,9 +56,39 @@ void radioOff() {
     panel_runtime::resyncDisplay();
 }
 
+// delay() that keeps re-aligning the RGB panel while the radio is on.
+void waitMs(uint32_t ms) {
+    static uint32_t lastResync = 0;
+    const uint32_t end = millis() + ms;
+    while (static_cast<int32_t>(end - millis()) > 0) {
+        delay(20);
+        if (millis() - lastResync >= kResyncEveryMs) {
+            lastResync = millis();
+            panel_runtime::resyncDisplay();
+        }
+    }
+}
+
+void logDhcp() {
+    esp_netif_t* netif = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
+    esp_netif_dhcp_status_t st = ESP_NETIF_DHCP_INIT;
+    if (netif == nullptr || esp_netif_dhcpc_get_status(netif, &st) != ESP_OK) {
+        printf("wifi: no STA netif\n");
+        return;
+    }
+    esp_netif_ip_info_t ip{};
+    esp_netif_get_ip_info(netif, &ip);
+    printf("wifi: dhcp client %d (0 init, 1 started, 2 stopped), ip " IPSTR "\n", static_cast<int>(st), IP2STR(&ip.ip));
+}
+
 void scan() {
     WiFi.mode(WIFI_STA);
-    const int n = WiFi.scanNetworks();
+    WiFi.scanNetworks(true); // async, so the panel can be re-aligned meanwhile
+    int n = WIFI_SCAN_RUNNING;
+    for (int i = 0; i < 300 && n == WIFI_SCAN_RUNNING; i++) {
+        waitMs(50);
+        n = WiFi.scanComplete();
+    }
     g_networkCount = 0;
     for (int i = 0; i < n; i++) {
         const String name = WiFi.SSID(i);
@@ -96,28 +131,72 @@ void scan() {
     setStatus(State::ScanDone, text);
 }
 
+// Last disconnect reason (wifi_err_reason_t) seen while connecting.
+volatile int g_disconnectReason = 0;
+volatile bool g_associated = false;
+
+void onWifiEvent(arduino_event_id_t event, arduino_event_info_t info) {
+    if (event == ARDUINO_EVENT_WIFI_STA_CONNECTED) {
+        g_associated = true;
+    }
+    if (event == ARDUINO_EVENT_WIFI_STA_DISCONNECTED) {
+        g_disconnectReason = info.wifi_sta_disconnected.reason;
+        printf("wifi: disconnected, reason %d\n", g_disconnectReason);
+    }
+}
+
 void sync() {
+    static bool eventsHooked = false;
+    if (!eventsHooked) {
+        WiFi.onEvent(onWifiEvent);
+        eventsHooked = true;
+    }
+    g_disconnectReason = 0;
+    g_associated = false;
+    printf("wifi: connecting to \"%s\" (password %u characters)\n", g_job.ssid,
+           static_cast<unsigned>(strlen(g_job.password)));
     WiFi.mode(WIFI_STA);
     WiFi.begin(g_job.ssid, g_job.password);
     const uint32_t start = millis();
+    uint32_t lastLog = start;
     while (WiFi.status() != WL_CONNECTED && millis() - start < kConnectTimeoutMs) {
-        delay(100);
+        waitMs(100);
+        if (millis() - lastLog >= 5000) {
+            lastLog = millis();
+            printf("wifi: status %d\n", static_cast<int>(WiFi.status()));
+            logDhcp();
+        }
     }
     if (WiFi.status() != WL_CONNECTED) {
         const wl_status_t st = WiFi.status();
+        const int reason = g_disconnectReason;
         radioOff();
-        setStatus(State::Failed, st == WL_NO_SSID_AVAIL ? "network not found" : "can't connect (password?)");
+        char text[48];
+        if (g_associated) {
+            // Joined (so the password is right) but DHCP never answered.
+            snprintf(text, sizeof(text), "joined, but got no IP address");
+        } else if (st == WL_NO_SSID_AVAIL || reason == WIFI_REASON_NO_AP_FOUND) {
+            snprintf(text, sizeof(text), "network not found");
+        } else if (reason == WIFI_REASON_AUTH_FAIL || reason == WIFI_REASON_4WAY_HANDSHAKE_TIMEOUT ||
+                   reason == WIFI_REASON_HANDSHAKE_TIMEOUT) {
+            snprintf(text, sizeof(text), "wrong password? (reason %d)", reason);
+        } else {
+            snprintf(text, sizeof(text), "can't connect (status %d, reason %d)", static_cast<int>(st), reason);
+        }
+        setStatus(State::Failed, text);
         return;
     }
 
     setStatus(State::Syncing, "getting the time...");
     // configTzTime, not configTime: the latter replaces TZ with a fixed offset.
     configTzTime(g_job.tz, "pool.ntp.org", "time.google.com", "time.cloudflare.com");
+    // sntp_get_sync_status() reports COMPLETED once, then resets: read it once.
     const uint32_t syncStart = millis();
-    while (sntp_get_sync_status() != SNTP_SYNC_STATUS_COMPLETED && millis() - syncStart < kSyncTimeoutMs) {
-        delay(100);
+    bool ok = false;
+    while (!ok && millis() - syncStart < kSyncTimeoutMs) {
+        waitMs(100);
+        ok = sntp_get_sync_status() == SNTP_SYNC_STATUS_COMPLETED;
     }
-    const bool ok = sntp_get_sync_status() == SNTP_SYNC_STATUS_COMPLETED;
     esp_sntp_stop();
     radioOff();
     if (!ok) {
