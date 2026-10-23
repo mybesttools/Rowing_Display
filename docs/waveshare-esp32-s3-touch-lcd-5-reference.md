@@ -1,6 +1,9 @@
 # Waveshare ESP32-S3 Touch LCD 5 reference
 
-This board is kept as a reference only for the current project. We are not using the vendor repo as the active firmware source; we are using it to validate the correct board pin mapping and initialization patterns.
+Pin and connector notes for the 5" board, the console in daily use
+(`esp32-s3-lcd5`). The vendor repo is the source for the pin mapping and
+the init patterns. How this firmware uses each connector is in
+[Hardware.md](../Hardware.md).
 
 ## Official resources
 
@@ -74,17 +77,14 @@ interface, are instead multiplexed behind a single CH422G I2C IO expander
 
 CH422G's `IO0-IO7` pins share **one** global direction bit (all-input or
 all-output — see the vendor driver's `WR_SET`/`IO_OE` bit, bundled at
-`firmware/lib/ESP32_IO_Expander/src/port/esp_io_expander_ch422g.c`). Since
-IO1-IO4 above must stay in output mode for the board to keep functioning
-(backlight, resets, SD-CS), `DI0`/`DI1` can never be switched into a true
-input mode without breaking those. They're usable anyway because the pins
-are quasi-bidirectional: left at their output latch's power-on default
-(logic 1, weak pull), an external contact pulling the line low is still
-visible on a plain I2C read (`digitalRead()`/`read_input_reg()`, independent
-of the direction register). This project's `firmware/src/sensor_input.cpp`
-polls `DI0` this way for the stroke/reed sensor — see that file and
-`Hardware.md`'s "Sensor wiring differs by board" section for the reed
-wiring and the project-specific implementation.
+`firmware/lib/ESP32_IO_Expander/src/port/esp_io_expander_ch422g.c`). `RD_IO`
+only reflects the real pin levels in input mode; in output mode it reads
+back the latch. Board init leaves IO0-7 as outputs, so
+`firmware/src/sensor_input.cpp` calls `enableAllIO_Input()` after the
+display is up and polls `DI1` (EXIO5) by default. SD card access borrows
+the expander back to output mode, because chip select is EXIO4, and
+returns it to input afterwards. Reed wiring is in Hardware.md: `DI1` to
+`GND`, `DI_COM` left unconnected.
 
 ### Terminal block (16-way screw terminal)
 
@@ -92,9 +92,10 @@ wiring and the project-specific implementation.
 VIN GND VOUT GND | SDA SCL | CAN_L CAN_H | 485_B 485_A | DO0 DO1 DI_COM GND DI0 DI1
 ```
 
-- `DI0`/`DI1`: isolated digital inputs (see CH422G table above). `DI_COM`
-  floating = dry-contact/passive mode (plain switch/reed, no external
-  power); tied to supply +/- = NPN/PNP wet-contact active mode, 5-36V DC.
+- `DI0`/`DI1`: isolated digital inputs (see the CH422G table above). The
+  board powers `DI_COM`. A dry contact goes from `DIx` to `GND`. Bridging
+  `DIx` to `DI_COM` does not trigger the input. The firmware default is
+  `DI1`.
 - `DO0`/`DO1`: CH422G open-collector outputs (OC0/OC1).
 - `CAN_L`/`CAN_H`: TWAI, shares GPIO19/20 with native USB.
 - `485_A`/`485_B`: RS485, GPIO15/16.
@@ -104,15 +105,18 @@ VIN GND VOUT GND | SDA SCL | CAN_L CAN_H | 485_B 485_A | DO0 DO1 DI_COM GND DI0 
 
 ### Other connectors
 
-- RTC: CR927 coin-cell holder, backs a PCF85063 RTC chip.
+- RTC: CR927 coin-cell holder, backs a PCF85063. `rtc_clock.cpp` reads it
+  at boot (I2C 0x51). The cell voltage is not on a GPIO.
 - Battery: separate 2-pin JST `Battery` connector + `Battery Switch` +
-  onboard LiPo charge circuit (`CHG`/`DONE` LEDs) — distinct from the RTC
-  coin cell, not used in a USB-C-powered install.
-- TF/SD card slot: top-left corner, SPI as above.
+  onboard LiPo charge circuit (`CHG`/`DONE` LEDs), distinct from the RTC
+  coin cell. The installed board runs on a LiPo here and charges over
+  USB-C. Charge status is the LEDs only; the firmware cannot read pack
+  voltage.
+- TF/SD card slot: top-left corner, SPI as above. Used for scene
+  backgrounds and session TCX files.
 
-None of RTC, battery, SD, CAN, RS485, DO0/DO1 are wired up by this
-project's firmware — DI0 (the reed sensor) is the only terminal in active
-use.
+CAN, RS485, and `DO0`/`DO1` are unused by this firmware. The reed uses
+`DI1` (Settings can select `DI0`).
 
 ## Notes
 

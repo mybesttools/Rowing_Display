@@ -14,6 +14,10 @@ tunable on the device under Settings, see Hardware.md):
 - **Dunlop Air Rower 750** (air resistance, flywheel/fan)
 - **Kuipers AquaRower** (water resistance, paddle-wheel tank)
 
+The plan is a Hall sensor on both machines. The Kuipers console currently
+reads that rower's stock reed. Whether a Hall can be mounted on the
+paddle wheel is still to be checked on the machine; see Hardware.md.
+
 Two board options, same UI/pipeline on both:
 
 - Waveshare ESP32-S3-Touch-LCD-7 (800×480, dev board)
