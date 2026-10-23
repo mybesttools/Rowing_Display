@@ -53,6 +53,31 @@ pio test -e native-test                 # run the metrics-model unit tests
 ~/.platformio/penv/bin/python scripts/fetch_pulse_log.py --port /dev/cu.usbmodemXXXX
 ```
 
+## Backgrounds
+
+The scene behind the rower is a photo. One is built in; more can go on a
+FAT32 SD card in a `backgrounds` folder (up to 16) and be picked under
+Settings > DISPLAY > Background. To make your own from a photo of calm water
+(no boat in the foreground), install the image libraries once:
+
+```bash
+pip3 install numpy pillow
+```
+
+Then:
+
+```bash
+python3 scripts/make_background.py my_lake.jpg --name "Home lake"
+```
+
+This writes `sd_card/backgrounds/home_lake.bin` and a preview in
+`background_previews/`. In the preview the red dashed line must sit where
+the far shore meets the water; if it doesn't, rerun with `--horizon 0.52`
+(0 = top of the photo, 1 = bottom). `--glint 0` turns off the sun
+reflection, and `--out /Volumes/<card>/backgrounds` writes straight to the
+card. `python3 scripts/make_background.py --help` lists every option.
+`scripts/gen_scene_background.py` rebuilds the bundled set.
+
 ## License
 
 This project's own code (`firmware/src`, `firmware/include`, `firmware/test`,

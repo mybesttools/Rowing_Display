@@ -185,7 +185,9 @@ and reads the selected file into the (not yet used) 800×480 present buffer,
 so it costs no PSRAM; the scene frames are rendered from it and the card is
 unmounted. The card is only read at boot because CS needs the CH422G in
 output mode, and the 5" board's DI polling switches it to input right after.
-Picking another background in Settings saves and restarts. No card, or the
+Picking another background in Settings saves and restarts. Users make their
+own with `scripts/make_background.py` (waterline detected from the
+reflection's mirror symmetry, checked in a preview PNG; README "Backgrounds"). No card, or the
 saved file missing: built-in background. Mounting follows Waveshare's
 ESP-IDF example (`esp_vfs_fat_sdspi_mount`, `gpio_cs = -1`, CS held low on
 EXIO4).
