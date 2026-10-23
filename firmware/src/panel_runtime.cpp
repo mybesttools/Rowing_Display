@@ -24,6 +24,14 @@ bool consumeSessionStartRequested() {
     return false;
 }
 
+bool consumeSessionEndRequested() {
+    return false;
+}
+
+void showSession() {}
+
+void setBanner(const char*) {}
+
 void* ioExpanderBase() {
     return nullptr;
 }
@@ -38,6 +46,7 @@ void resyncDisplay() {}
 #include "esp_heap_caps.h"
 #include "esp_lcd_panel_rgb.h"
 #include "esp_lv_adapter_arduino.h"
+#include "pace_boat.h"
 #include "rower_scene.h"
 #include "sd_backgrounds.h"
 #include "settings.h"
@@ -98,8 +107,20 @@ lv_obj_t* g_distanceLabel = nullptr;
 lv_obj_t* g_wattsLabel = nullptr;
 lv_obj_t* g_timeLabel = nullptr;
 lv_obj_t* g_strokesLabel = nullptr;
+lv_obj_t* g_avgSplitLabel = nullptr;
+lv_obj_t* g_kcalLabel = nullptr;
+lv_obj_t* g_banner = nullptr;
+lv_obj_t* g_paceLabel = nullptr;
+
+// Pace boat: how far it is ahead of us, set by update() and drawn by
+// blitFrame() on the animation timer.
+volatile bool g_paceBoatOn = false;
+volatile float g_paceBoatGap = 0.0f;
+// Its oars swing at a steady 24 spm.
+constexpr uint32_t kPaceBoatStrokeMs = 2500;
 
 volatile bool g_sessionStartRequested = false;
+volatile bool g_sessionEndRequested = false;
 
 void formatMmSs(char* out, size_t cap, uint32_t totalSec) {
     snprintf(out, cap, "%lu:%02lu", static_cast<unsigned long>(totalSec / 60), static_cast<unsigned long>(totalSec % 60));
@@ -180,6 +201,10 @@ void blitFrame(const lv_draw_buf_t* frame) {
     }
     lv_draw_buf_invalidate_cache(frame, nullptr);
     up2xRgb565(frame, g_present);
+    if (g_paceBoatOn) {
+        const float phase = static_cast<float>(millis() % kPaceBoatStrokeMs) / kPaceBoatStrokeMs;
+        pace_boat::draw(g_present, g_paceBoatGap, phase);
+    }
     lv_draw_buf_flush_cache(g_present, nullptr);
     if (g_bgImg != nullptr) {
         lv_obj_invalidate(g_bgImg);
@@ -323,6 +348,7 @@ void onStartClicked(lv_event_t* /*e*/) {
 }
 
 void onEscapeClicked(lv_event_t* /*e*/) {
+    g_sessionEndRequested = true;
     stopScene();
     showScreen(g_homeScreen);
 }
@@ -473,6 +499,11 @@ void buildSessionScreen() {
     lv_obj_set_style_text_font(g_splitLabel, &lv_font_montserrat_48, 0);
     lv_label_set_text(g_splitLabel, "-:--");
 
+    g_avgSplitLabel = lv_label_create(splitBlock);
+    lv_obj_set_style_text_color(g_avgSplitLabel, kColorCaption, 0);
+    lv_obj_set_style_text_font(g_avgSplitLabel, &lv_font_montserrat_14, 0);
+    lv_label_set_text(g_avgSplitLabel, "avg -:--");
+
     makeTile(topBar, "SPM", &g_spmLabel);
     makeTile(topBar, "WATTS", &g_wattsLabel);
 
@@ -484,6 +515,31 @@ void buildSessionScreen() {
     makeTile(bottomBar, "TIME", &g_timeLabel);
     makeTile(bottomBar, "STROKES", &g_strokesLabel);
     makeTile(bottomBar, "METERS", &g_distanceLabel);
+    makeTile(bottomBar, "KCAL", &g_kcalLabel);
+
+    g_banner = lv_label_create(g_sessionScreen);
+    lv_obj_add_flag(g_banner, LV_OBJ_FLAG_IGNORE_LAYOUT);
+    lv_obj_set_style_text_font(g_banner, &lv_font_montserrat_32, 0);
+    lv_obj_set_style_text_align(g_banner, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_set_style_text_color(g_banner, kColorValue, 0);
+    lv_obj_set_style_bg_color(g_banner, kColorTile, 0);
+    lv_obj_set_style_bg_opa(g_banner, LV_OPA_80, 0);
+    lv_obj_set_style_radius(g_banner, 12, 0);
+    lv_obj_set_style_pad_hor(g_banner, 24, 0);
+    lv_obj_set_style_pad_ver(g_banner, 8, 0);
+    lv_obj_align(g_banner, LV_ALIGN_CENTER, 0, -40);
+    lv_obj_add_flag(g_banner, LV_OBJ_FLAG_HIDDEN);
+
+    g_paceLabel = lv_label_create(g_sessionScreen);
+    lv_obj_add_flag(g_paceLabel, LV_OBJ_FLAG_IGNORE_LAYOUT);
+    lv_obj_set_style_text_font(g_paceLabel, &lv_font_montserrat_24, 0);
+    lv_obj_set_style_bg_color(g_paceLabel, kColorTile, 0);
+    lv_obj_set_style_bg_opa(g_paceLabel, LV_OPA_60, 0);
+    lv_obj_set_style_radius(g_paceLabel, 8, 0);
+    lv_obj_set_style_pad_hor(g_paceLabel, 10, 0);
+    lv_obj_set_style_pad_ver(g_paceLabel, 4, 0);
+    lv_obj_align(g_paceLabel, LV_ALIGN_TOP_RIGHT, 0, kTopBarH + 8);
+    lv_obj_add_flag(g_paceLabel, LV_OBJ_FLAG_HIDDEN);
 
     // The top bar is created after the escape button and overlaps it; keep
     // the button on top so it gets the touch.
@@ -589,6 +645,28 @@ void update(const RowerMetrics& metrics) {
         g_cyclePosition = cyclePositionForMetrics(metrics);
     }
 
+    // Pace boat position: session time at the target split, interpolated
+    // between whole seconds so it glides instead of jumping once a second.
+    static uint32_t lastElapsedSec = UINT32_MAX;
+    static uint32_t elapsedChangedMs = 0;
+    const uint16_t paceSplitSec = settings::current().paceBoatSplitSec;
+    float paceDelta = 0.0f; // metres we're ahead of the pace boat
+    if (paceSplitSec > 0) {
+        const uint32_t now = millis();
+        if (metrics.elapsedSec != lastElapsedSec) {
+            lastElapsedSec = metrics.elapsedSec;
+            elapsedChangedMs = now;
+        }
+        float sec = static_cast<float>(metrics.elapsedSec);
+        if (!metrics.paused && metrics.elapsedSec > 0) {
+            sec += std::min(1.0f, static_cast<float>(now - elapsedChangedMs) / 1000.0f);
+        }
+        const float paceMeters = sec * 500.0f / static_cast<float>(paceSplitSec);
+        paceDelta = metrics.distanceMeters - paceMeters;
+        g_paceBoatGap = -paceDelta;
+    }
+    g_paceBoatOn = paceSplitSec > 0;
+
     char buf[16];
 
     if (esp_lv_adapter_lock(10) != ESP_OK) {
@@ -618,6 +696,59 @@ void update(const RowerMetrics& metrics) {
     snprintf(buf, sizeof(buf), "%lu", static_cast<unsigned long>(metrics.strokeCount));
     lv_label_set_text(g_strokesLabel, buf);
 
+    snprintf(buf, sizeof(buf), "%.0f", metrics.energyKcal);
+    lv_label_set_text(g_kcalLabel, buf);
+
+    if (paceSplitSec > 0) {
+        char pace[12];
+        formatMmSs(pace, sizeof(pace), paceSplitSec);
+        lv_label_set_text_fmt(g_paceLabel, "PACE %s  %+.0f m", pace, paceDelta);
+        lv_obj_set_style_text_color(g_paceLabel, paceDelta >= 0.0f ? kColorAccent : lv_color_hex(0xFF9F43), 0);
+        lv_obj_clear_flag(g_paceLabel, LV_OBJ_FLAG_HIDDEN);
+    } else {
+        lv_obj_add_flag(g_paceLabel, LV_OBJ_FLAG_HIDDEN);
+    }
+
+    if (metrics.avgSplitSecPer500m > 0.0f) {
+        char pace[12];
+        formatMmSs(pace, sizeof(pace), static_cast<uint32_t>(metrics.avgSplitSecPer500m));
+        lv_label_set_text_fmt(g_avgSplitLabel, "avg %s  |  %.0f spm", pace, metrics.avgStrokeRateSpm);
+    } else {
+        lv_label_set_text(g_avgSplitLabel, "avg -:--");
+    }
+
+    esp_lv_adapter_unlock();
+}
+
+bool consumeSessionEndRequested() {
+    if (!g_sessionEndRequested) {
+        return false;
+    }
+    g_sessionEndRequested = false;
+    return true;
+}
+
+void showSession() {
+    if (g_display == nullptr || esp_lv_adapter_lock(-1) != ESP_OK) {
+        return;
+    }
+    if (lv_screen_active() != g_sessionScreen) {
+        startScene();
+        showScreen(g_sessionScreen);
+    }
+    esp_lv_adapter_unlock();
+}
+
+void setBanner(const char* text) {
+    if (g_banner == nullptr || esp_lv_adapter_lock(-1) != ESP_OK) {
+        return;
+    }
+    if (text == nullptr) {
+        lv_obj_add_flag(g_banner, LV_OBJ_FLAG_HIDDEN);
+    } else {
+        lv_label_set_text(g_banner, text);
+        lv_obj_clear_flag(g_banner, LV_OBJ_FLAG_HIDDEN);
+    }
     esp_lv_adapter_unlock();
 }
 

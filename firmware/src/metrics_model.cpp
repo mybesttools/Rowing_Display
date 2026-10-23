@@ -35,6 +35,8 @@ void MetricsModel::reset() {
 
     sessionStartMs_ = 0;
     lastTickMs_ = 0;
+    paused_ = false;
+    pauseStartMs_ = 0;
 
     lastDrivePhaseDurationMs_ = 0;
     lastRecoveryPhaseDurationMs_ = 0;
@@ -49,6 +51,45 @@ void MetricsModel::reset() {
     recoveryStartMicros_ = 0;
 }
 
+void MetricsModel::pause(uint32_t nowMs) {
+    if (paused_) {
+        return;
+    }
+    paused_ = true;
+    pauseStartMs_ = nowMs;
+
+    // Drop live readings and pulse timing, so rowing after resume() starts
+    // from rest instead of computing an interval across the pause.
+    phase_ = RowerPhase::Idle;
+    lastPulseMicros_ = 0;
+    lastDtMicros_ = 0;
+    lastStrokeStartMs_ = 0;
+    strokeIntervalMs_ = 0;
+    strokeSpeedMps_ = 0.0f;
+    omegaSmoothed_ = 0.0f;
+    recoveryCount_ = 0;
+    metrics_.phase = RowerPhase::Idle;
+    metrics_.phaseProgress = 0.0f;
+    metrics_.rpm = 0.0f;
+    metrics_.strokeRateSpm = 0.0f;
+    metrics_.powerWatts = 0.0f;
+    metrics_.splitSecPer500m = 0.0f;
+    metrics_.energyPerHourKcal = 0.0f;
+    metrics_.paused = true;
+}
+
+void MetricsModel::resume(uint32_t nowMs) {
+    if (!paused_) {
+        return;
+    }
+    paused_ = false;
+    metrics_.paused = false;
+    if (sessionStartMs_ != 0) {
+        sessionStartMs_ += nowMs - pauseStartMs_;
+        lastTickMs_ = nowMs;
+    }
+}
+
 void MetricsModel::setParams(const ModelParams& params) {
     params_ = params;
     dragFactor_ = 0.0f;
@@ -56,6 +97,9 @@ void MetricsModel::setParams(const ModelParams& params) {
 }
 
 void MetricsModel::onPulseMicros(uint32_t nowMicros, uint32_t nowMs) {
+    if (paused_) {
+        return;
+    }
     if (sessionStartMs_ == 0) {
         sessionStartMs_ = nowMs;
         lastTickMs_ = sessionStartMs_;
@@ -378,8 +422,23 @@ void MetricsModel::tickStrokeMode(uint32_t nowMs) {
     metrics_.splitSecPer500m = (strokeSpeedMps_ > 0.05f) ? (500.0f / strokeSpeedMps_) : 0.0f;
 }
 
+void MetricsModel::updateSessionTotals(uint32_t nowMs, float dtSeconds) {
+    const float elapsedSec = static_cast<float>(nowMs - sessionStartMs_) / 1000.0f;
+    if (elapsedSec > 0.0f) {
+        metrics_.avgStrokeRateSpm = static_cast<float>(metrics_.strokeCount) * 60.0f / elapsedSec;
+        metrics_.avgSplitSecPer500m = metrics_.distanceMeters > 1.0f ? 500.0f * elapsedSec / metrics_.distanceMeters : 0.0f;
+    }
+
+    if (phase_ == RowerPhase::Idle) {
+        metrics_.energyPerHourKcal = 0.0f;
+        return;
+    }
+    metrics_.energyPerHourKcal = 4.0f * 0.8604f * metrics_.powerWatts + 300.0f;
+    metrics_.energyKcal += metrics_.energyPerHourKcal * dtSeconds / 3600.0f;
+}
+
 void MetricsModel::tick(uint32_t nowMs) {
-    if (sessionStartMs_ == 0) {
+    if (sessionStartMs_ == 0 || paused_) {
         return;
     }
 
@@ -394,6 +453,7 @@ void MetricsModel::tick(uint32_t nowMs) {
     if (params_.mode == cfg::PulseMode::Stroke) {
         metrics_.elapsedSec = (nowMs - sessionStartMs_) / 1000;
         tickStrokeMode(nowMs);
+        updateSessionTotals(nowMs, static_cast<float>(dtMs) / 1000.0f);
         return;
     }
 
@@ -403,4 +463,5 @@ void MetricsModel::tick(uint32_t nowMs) {
     metrics_.elapsedSec = (nowMs - sessionStartMs_) / 1000;
 
     recomputeDerivedMetrics(static_cast<float>(dtMs) / 1000.0f);
+    updateSessionTotals(nowMs, static_cast<float>(dtMs) / 1000.0f);
 }

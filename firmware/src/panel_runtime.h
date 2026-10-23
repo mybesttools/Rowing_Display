@@ -12,6 +12,18 @@ void update(const RowerMetrics& metrics);
 // model at that point so the new session starts from zero.
 bool consumeSessionStartRequested();
 
+// True exactly once after the user left the session screen (the X button):
+// the session is over.
+bool consumeSessionEndRequested();
+
+// Main loop: switch to the session screen (an app sent Start while the
+// home or settings screen was up). No-op if it's already showing.
+void showSession();
+
+// Main loop: large centered text over the session scene ("PAUSED",
+// "STOPPED"), or nullptr to hide it.
+void setBanner(const char* text);
+
 // The board's IO expander (CH422G on Waveshare boards) as a raw
 // esp_expander::Base*, or nullptr before begin() / in SIMULATION_MODE.
 // Returned as void* so this header stays usable without pulling in

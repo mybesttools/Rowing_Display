@@ -25,6 +25,16 @@ bool draw(lv_draw_buf_t* dst, float drive, float waterTime, bool recovering);
 // stay valid, pixels included, until the last draw().
 void setBackground(const scene_background::Background& bg);
 
+// Projects a point in the scene (metres: x right, y up from the water, z
+// ahead of our boat's stern) to kWidth x kHeight frame pixels, with the
+// scale there in pixels per metre. False if it's too close to or behind the
+// camera to draw.
+bool project(float x, float y, float z, float& sx, float& sy, float& pixelsPerMetre);
+
+// Seat position (z, metres) of our rower mid-stroke; a boat level with ours
+// has its rower at the same z.
+constexpr float kRowerZ = 1.6f;
+
 // Frees the scratch canvas draw() renders into. Call once all frames are
 // precomputed; the next draw() re-creates it.
 void releaseCanvas();

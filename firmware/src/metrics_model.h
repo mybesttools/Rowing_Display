@@ -16,6 +16,15 @@ struct RowerMetrics {
     float splitSecPer500m = 0.0f;
     float distanceMeters = 0.0f;
     uint32_t elapsedSec = 0;
+    // Session averages: pace = elapsed time / distance, rate = strokes /
+    // elapsed minutes (pauses excluded, see MetricsModel::pause()).
+    float avgSplitSecPer500m = 0.0f;
+    float avgStrokeRateSpm = 0.0f;
+    // Concept2's estimate: kcal/h = 4 * 0.8604 * watts + 300, accumulated
+    // while rowing (not while Idle or paused).
+    float energyKcal = 0.0f;
+    float energyPerHourKcal = 0.0f;
+    bool paused = false;
     // Fitted flywheel drag factor (k, kg*m^2). Exposed mainly for
     // calibration/debugging — watch this settle to a stable value across
     // strokes at a given resistance setting once FLYWHEEL_INERTIA_KGM2 is
@@ -64,6 +73,12 @@ public:
     // change just because a new session started.
     void reset();
 
+    // Freezes the session (time, distance, averages); pulses are ignored
+    // until resume(). Elapsed time doesn't count the paused stretch.
+    void pause(uint32_t nowMs);
+    void resume(uint32_t nowMs);
+    bool paused() const { return paused_; }
+
     const RowerMetrics& metrics() const { return metrics_; }
 
 private:
@@ -75,6 +90,7 @@ private:
     void updatePhaseProgress(uint32_t nowMs);
     void onStrokePulse(uint32_t nowMs);
     void tickStrokeMode(uint32_t nowMs);
+    void updateSessionTotals(uint32_t nowMs, float dtSeconds);
 
     ModelParams params_;
 
@@ -90,6 +106,8 @@ private:
 
     uint32_t sessionStartMs_ = 0;
     uint32_t lastTickMs_ = 0;
+    bool paused_ = false;
+    uint32_t pauseStartMs_ = 0;
 
     // Last measured duration of a completed Drive/Recovery phase, used as
     // the "expected" duration to normalize the current phase's elapsed time

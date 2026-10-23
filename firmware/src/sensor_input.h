@@ -31,4 +31,13 @@ struct PollStats {
 };
 PollStats takePollStats();
 
+// 5" board: the CH422G is in input mode while DI polling runs, which leaves
+// its other pins (the SD card's chip select) undriven. takeExpanderForOutput()
+// pauses polling and puts it in output mode (DI latches low, so the inputs'
+// pull-ups see no drive fight); releaseExpander() switches back and resumes.
+// Pulses in between are missed. True / no-op on other boards, and before
+// polling has started (the expander is still in output mode then).
+bool takeExpanderForOutput();
+void releaseExpander();
+
 } // namespace sensor_input

@@ -1,5 +1,6 @@
 #include <Arduino.h>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 
 #include "ble_ftms.h"
@@ -7,7 +8,9 @@
 #include "metrics_model.h"
 #include "panel_runtime.h"
 #include "pulse_log.h"
+#include "rtc_clock.h"
 #include "sensor_input.h"
+#include "session_log.h"
 #include "settings.h"
 #include "waveshare_7_board.h"
 
@@ -22,6 +25,9 @@ uint32_t g_lastLogMs = 0;
 uint32_t g_lastPulseMs = 0;
 // Background the scene frames were rendered with at boot.
 settings::Settings g_bootSettings;
+// A session runs from START SESSION (or an app's Start) until the X button
+// or an app's Stop. While it runs an app may pause and resume it.
+bool g_sessionActive = false;
 
 void printMetrics(const RowerMetrics& m) {
     printf(
@@ -60,7 +66,116 @@ void applySettings(const settings::Settings& s) {
         static_cast<int>(s.pulseMode), s.expanderPin, m.pulsesPerRev, m.flywheelInertia, m.initialDragFactor,
         m.boatConstant, m.minDriveMs, m.minRecoveryMs, m.minPulseGapMs, s.sensorParams.debounceMs
     );
-    printf("settings: %s, %s\n", settings::machineName(s.machine), settings::sensorName(s.sensor));
+    printf("settings: %s, %s, background \"%s\", pace boat %u s\n", settings::machineName(s.machine),
+           settings::sensorName(s.sensor), s.background, s.paceBoatSplitSec);
+}
+
+void startSession(uint32_t nowMs) {
+    g_model.reset();
+    session_log::start();
+    g_sessionActive = true;
+    panel_runtime::setBanner(nullptr);
+    pulse_log::printf("R,%lu\n", static_cast<unsigned long>(nowMs));
+    printf("session: started\n");
+    g_ble.notifyStatus(ftms::status::Event::StartedOrResumedByUser);
+}
+
+void endSession(uint32_t nowMs) {
+    if (!g_sessionActive) {
+        return;
+    }
+    g_sessionActive = false;
+    g_model.pause(nowMs);
+    panel_runtime::setBanner("STOPPED");
+    printf("session: stopped (%lu strokes, %.0f m)\n", static_cast<unsigned long>(g_model.metrics().strokeCount),
+           g_model.metrics().distanceMeters);
+    g_ble.notifyStatus(ftms::status::Event::StoppedOrPausedByUser, ftms::control_point::kStop);
+
+    char fileName[40] = "";
+    switch (session_log::save(g_model.metrics(), panel_runtime::ioExpanderBase(), fileName, sizeof(fileName))) {
+        case session_log::SaveResult::Saved: {
+            char banner[64];
+            snprintf(banner, sizeof(banner), "STOPPED\nsaved %s", fileName);
+            panel_runtime::setBanner(banner);
+            break;
+        }
+        case session_log::SaveResult::NoCard:
+            panel_runtime::setBanner("STOPPED\nno SD card, not saved");
+            break;
+        case session_log::SaveResult::Failed:
+            panel_runtime::setBanner("STOPPED\nsaving failed");
+            break;
+        case session_log::SaveResult::Empty:
+            break;
+    }
+}
+
+// USB serial commands, one per line:
+//   T<unix seconds>  set the clock (scripts/set_clock.py)
+//   S / E            start / end a session, like START SESSION and the X
+//   P                one sensor pulse, as if from the reed (scripts/sim_row.py)
+void pollSerialCommands(uint32_t nowMs) {
+    static char line[24];
+    static size_t len = 0;
+    while (Serial.available() > 0) {
+        const int c = Serial.read();
+        if (c == '\n' || c == '\r') {
+            line[len] = '\0';
+            if (len > 1 && line[0] == 'T') {
+                rtc_clock::set(static_cast<time_t>(strtoll(line + 1, nullptr, 10)));
+            } else if (len == 1 && line[0] == 'S') {
+                panel_runtime::showSession();
+                startSession(nowMs);
+            } else if (len == 1 && line[0] == 'E') {
+                endSession(nowMs);
+            } else if (len == 1 && line[0] == 'P') {
+                const uint32_t ms = millis();
+                g_lastPulseMs = ms;
+                g_model.onPulseMicros(micros(), ms);
+            }
+            len = 0;
+        } else if (len + 1 < sizeof(line)) {
+            line[len++] = static_cast<char>(c);
+        }
+    }
+}
+
+// Carries out a Fitness Machine Control Point command from an app.
+void handleAppCommand(BleFtmsService::Command command, uint32_t nowMs) {
+    switch (command) {
+        case BleFtmsService::Command::Start:
+            if (!g_sessionActive) {
+                panel_runtime::showSession();
+                startSession(nowMs);
+            } else if (g_model.paused()) {
+                g_model.resume(nowMs);
+                panel_runtime::setBanner(nullptr);
+                printf("session: resumed by app\n");
+                g_ble.notifyStatus(ftms::status::Event::StartedOrResumedByUser);
+            }
+            break;
+        case BleFtmsService::Command::Pause:
+            if (g_sessionActive && !g_model.paused()) {
+                g_model.pause(nowMs);
+                panel_runtime::setBanner("PAUSED");
+                printf("session: paused by app\n");
+                g_ble.notifyStatus(ftms::status::Event::StoppedOrPausedByUser, ftms::control_point::kPause);
+            }
+            break;
+        case BleFtmsService::Command::Stop:
+            endSession(nowMs);
+            break;
+        case BleFtmsService::Command::Reset:
+            g_model.reset();
+            if (g_sessionActive) {
+                panel_runtime::setBanner(nullptr);
+            }
+            printf("session: reset by app\n");
+            g_ble.notifyStatus(ftms::status::Event::Reset);
+            break;
+        case BleFtmsService::Command::None:
+            break;
+    }
 }
 
 } // namespace
@@ -85,6 +200,7 @@ void setup() {
 
     g_ble.begin("RowingDisplay-ESP32");
     panel_runtime::begin();
+    rtc_clock::begin();
 
     printf("Rowing display starter scaffold ready\n");
 }
@@ -107,10 +223,15 @@ void loop() {
     }
 
     if (panel_runtime::consumeSessionStartRequested()) {
-        g_model.reset();
-        pulse_log::printf("R,%lu\n", static_cast<unsigned long>(nowMs));
-        printf("session: reset for new session\n");
+        startSession(nowMs);
     }
+    if (panel_runtime::consumeSessionEndRequested()) {
+        endSession(nowMs);
+    }
+    for (BleFtmsService::Command c = g_ble.takeCommand(); c != BleFtmsService::Command::None; c = g_ble.takeCommand()) {
+        handleAppCommand(c, nowMs);
+    }
+    pollSerialCommands(nowMs);
 
     uint32_t pulseMicros = 0;
     while (sensor_input::consumePulse(pulseMicros)) {
@@ -126,6 +247,9 @@ void loop() {
         // timestamps and can be newer than nowMs, which would underflow the
         // model's idle check and drop it to Idle mid-stroke.
         g_model.tick(millis());
+        if (g_sessionActive && !g_model.paused()) {
+            session_log::sample(g_model.metrics());
+        }
         printMetrics(g_model.metrics());
         panel_runtime::update(g_model.metrics());
     }

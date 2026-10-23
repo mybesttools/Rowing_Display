@@ -609,6 +609,19 @@ void downsampleInto(lv_draw_buf_t* dst) {
 
 } // namespace
 
+bool project(float x, float y, float z, float& sx, float& sy, float& pixelsPerMetre) {
+    const Camera cam;
+    if (z - cam.camZ < 1.0f) {
+        return false;
+    }
+    float ppm = 0.0f;
+    const Pt p = cam.project({x, y, z}, &ppm);
+    sx = p.x / kSS;
+    sy = p.y / kSS;
+    pixelsPerMetre = ppm / kSS;
+    return true;
+}
+
 void setBackground(const scene_background::Background& bg) {
     g_bg = &bg;
 }

@@ -13,7 +13,9 @@ namespace {
 constexpr char kNamespace[] = "rowing";
 constexpr char kKey[] = "settings";
 // Bump when Settings' layout changes; a mismatched blob falls back to defaults.
-constexpr uint8_t kVersion = 2;
+// 3: + paceBoatSplitSec, in former padding, so version-2 blobs are the same
+// size and load with it cleared.
+constexpr uint8_t kVersion = 3;
 
 struct Stored {
     uint8_t version;
@@ -67,6 +69,7 @@ Settings defaults(cfg::MachineType machine, cfg::SensorType sensor) {
         cfg::machinePreset(machine),
         cfg::sensorPreset(sensor),
         "",
+        0,
     };
 }
 
@@ -80,12 +83,16 @@ void begin() {
     const size_t len = prefs.getBytesLength(kKey);
     Stored stored{};
     StoredV1 v1{};
-    if (len == sizeof(stored) && prefs.getBytes(kKey, &stored, sizeof(stored)) == len && stored.version == kVersion) {
+    if (len == sizeof(stored) && prefs.getBytes(kKey, &stored, sizeof(stored)) == len &&
+        (stored.version == kVersion || stored.version == 2)) {
+        if (stored.version == 2) {
+            stored.s.paceBoatSplitSec = 0;
+        }
         g_current = stored.s;
         g_current.background[sizeof(g_current.background) - 1] = '\0';
     } else if (len == sizeof(v1) && prefs.getBytes(kKey, &v1, sizeof(v1)) == len && v1.version == 1) {
         g_current = Settings{v1.machine,       v1.sensor,       v1.pulseMode, v1.expanderPin,
-                             v1.machineParams, v1.sensorParams, ""};
+                             v1.machineParams, v1.sensorParams, "",           0};
     }
     prefs.end();
 }

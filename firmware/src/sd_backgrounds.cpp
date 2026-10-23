@@ -9,10 +9,7 @@
 
 #include <algorithm>
 
-#include "driver/sdspi_host.h"
-#include "esp_display_panel.hpp"
-#include "esp_lv_adapter_arduino.h"
-#include "esp_vfs_fat.h"
+#include "sd_card.h"
 #endif
 
 namespace sd_backgrounds {
@@ -29,22 +26,8 @@ int g_count = 0;
 
 #if !defined(SIMULATION_MODE)
 
-constexpr int kSdMosi = 11;
-constexpr int kSdSck = 12;
-constexpr int kSdMiso = 13;
-constexpr uint8_t kSdCsExpanderPin = 4; // CH422G EXIO4
-constexpr char kMountPoint[] = "/sd";
 constexpr char kDir[] = "/sd/backgrounds";
 constexpr size_t kPixelBytes = sizeof(uint16_t) * scene_background::kWidth * scene_background::kHeight;
-
-bool setChipSelect(esp_expander::Base* expander, bool selected) {
-    if (!esp_lv_adapter_i2c_lock(100)) {
-        return false;
-    }
-    const bool ok = expander->digitalWrite(kSdCsExpanderPin, selected ? LOW : HIGH);
-    esp_lv_adapter_i2c_unlock();
-    return ok;
-}
 
 bool hasSuffix(const char* s, const char* suffix) {
     const size_t n = strlen(s);
@@ -122,35 +105,8 @@ bool begin(void* expanderBase, const char* wanted, uint16_t* pixels, scene_backg
     (void)out;
     return false;
 #else
-    auto* expander = static_cast<esp_expander::Base*>(expanderBase);
-    if (expander == nullptr || !setChipSelect(expander, true)) {
-        return false;
-    }
-    // Same setup as Waveshare's ESP-IDF 03_SD_Test: CS is held low through
-    // the expander, so the SPI driver gets no CS pin (gpio_cs = -1).
-    sdmmc_host_t host = SDSPI_HOST_DEFAULT();
-    spi_bus_config_t bus{};
-    bus.mosi_io_num = kSdMosi;
-    bus.miso_io_num = kSdMiso;
-    bus.sclk_io_num = kSdSck;
-    bus.quadwp_io_num = -1;
-    bus.quadhd_io_num = -1;
-    bus.max_transfer_sz = 4000;
     bool loaded = false;
-    if (spi_bus_initialize(static_cast<spi_host_device_t>(host.slot), &bus, SDSPI_DEFAULT_DMA) != ESP_OK) {
-        printf("sd: spi bus init failed\n");
-        setChipSelect(expander, false);
-        return false;
-    }
-    sdspi_device_config_t slot = SDSPI_DEVICE_CONFIG_DEFAULT();
-    slot.gpio_cs = GPIO_NUM_NC;
-    slot.host_id = static_cast<spi_host_device_t>(host.slot);
-    esp_vfs_fat_sdmmc_mount_config_t mount{};
-    mount.format_if_mount_failed = false;
-    mount.max_files = 2;
-    mount.allocation_unit_size = 16 * 1024;
-    sdmmc_card_t* card = nullptr;
-    if (esp_vfs_fat_sdspi_mount(kMountPoint, &host, &slot, &mount, &card) == ESP_OK) {
+    if (sd_card::mount(expanderBase)) {
         listDir();
         for (int i = 0; i < g_count && wanted != nullptr && pixels != nullptr; i++) {
             if (strcmp(g_entries[i].file, wanted) == 0) {
@@ -158,12 +114,8 @@ bool begin(void* expanderBase, const char* wanted, uint16_t* pixels, scene_backg
                 break;
             }
         }
-        esp_vfs_fat_sdcard_unmount(kMountPoint, card);
-    } else {
-        printf("sd: no card (or mount failed)\n");
     }
-    spi_bus_free(static_cast<spi_host_device_t>(host.slot));
-    setChipSelect(expander, false);
+    sd_card::unmount();
     return loaded;
 #endif
 }

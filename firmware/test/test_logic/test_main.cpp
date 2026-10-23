@@ -177,40 +177,56 @@ void test_stroke_mode_counts_every_pulse_as_a_stroke() {
     TEST_ASSERT_TRUE(model.metrics().phase == RowerPhase::Idle);
 }
 
+namespace {
+
+uint16_t u16(const uint8_t* p) {
+    return static_cast<uint16_t>(p[0] | (p[1] << 8));
+}
+
+} // namespace
+
 void test_ftms_encoder_packet_shape() {
     RowerMetrics m;
     m.strokeRateSpm = 24.5f;
     m.strokeCount = 123;
+    m.avgStrokeRateSpm = 22.0f;
     m.distanceMeters = 456.0f;
     m.splitSecPer500m = 130.0f;
+    m.avgSplitSecPer500m = 140.0f;
     m.powerWatts = 210.0f;
+    m.energyKcal = 37.6f;
+    m.energyPerHourKcal = 1023.0f;
     m.elapsedSec = 789;
 
-    uint8_t packet[32] = {0};
-    const size_t n = ftms::encodeIndoorRowerData(m, packet, sizeof(packet));
+    // Both parts fit the 20-byte payload of the default ATT MTU.
+    uint8_t packet[20] = {0};
 
-    // Flags: AvgStrokeRate(bit1) | TotalDistance(bit2) | InstPace(bit3) |
-    // AvgPace(bit4) | InstPower(bit5) | ElapsedTime(bit11) = 0x083E. Bit 0
-    // ("More Data") must stay clear - Stroke Rate/Count are always present.
-    TEST_ASSERT_EQUAL_UINT32(17u, static_cast<uint32_t>(n));
-    TEST_ASSERT_EQUAL_HEX8(0x3Eu, packet[0]);
-    TEST_ASSERT_EQUAL_HEX8(0x08u, packet[1]);
-
-    // Stroke Rate (0.5 spm resolution) then Stroke Count, immediately
-    // after the flags and before any optional field.
-    TEST_ASSERT_EQUAL_UINT8(49u, packet[2]);
-    TEST_ASSERT_EQUAL_UINT16(123u, static_cast<uint16_t>(packet[3] | (packet[4] << 8)));
-
-    TEST_ASSERT_EQUAL_UINT8(49u, packet[5]); // Average Stroke Rate
-
-    const uint32_t distance = static_cast<uint32_t>(packet[6]) | (static_cast<uint32_t>(packet[7]) << 8) |
-                               (static_cast<uint32_t>(packet[8]) << 16);
+    // Part 0: More Data(bit0) | AvgStrokeRate(1) | TotalDistance(2) |
+    // InstPace(3) | AvgPace(4) | InstPower(5) = 0x003F, no stroke rate/count.
+    size_t n = ftms::encodeIndoorRowerData(m, 0, packet, sizeof(packet));
+    TEST_ASSERT_EQUAL_UINT32(12u, static_cast<uint32_t>(n));
+    TEST_ASSERT_EQUAL_UINT16(0x003Fu, u16(packet));
+    TEST_ASSERT_EQUAL_UINT8(44u, packet[2]); // Average Stroke Rate, 0.5 spm units
+    const uint32_t distance = static_cast<uint32_t>(packet[3]) | (static_cast<uint32_t>(packet[4]) << 8) |
+                               (static_cast<uint32_t>(packet[5]) << 16);
     TEST_ASSERT_EQUAL_UINT32(456u, distance);
+    TEST_ASSERT_EQUAL_UINT16(130u, u16(packet + 6));  // Instantaneous Pace
+    TEST_ASSERT_EQUAL_UINT16(140u, u16(packet + 8));  // Average Pace
+    TEST_ASSERT_EQUAL_UINT16(210u, u16(packet + 10)); // Instantaneous Power
 
-    TEST_ASSERT_EQUAL_UINT16(130u, static_cast<uint16_t>(packet[9] | (packet[10] << 8)));  // Instantaneous Pace
-    TEST_ASSERT_EQUAL_UINT16(130u, static_cast<uint16_t>(packet[11] | (packet[12] << 8))); // Average Pace
-    TEST_ASSERT_EQUAL_UINT16(210u, static_cast<uint16_t>(packet[13] | (packet[14] << 8))); // Instantaneous Power
-    TEST_ASSERT_EQUAL_UINT16(789u, static_cast<uint16_t>(packet[15] | (packet[16] << 8))); // Elapsed Time
+    // Part 1: ExpendedEnergy(bit8) | ElapsedTime(bit11) = 0x0900, with
+    // Stroke Rate + Stroke Count first since More Data is clear.
+    n = ftms::encodeIndoorRowerData(m, 1, packet, sizeof(packet));
+    TEST_ASSERT_EQUAL_UINT32(12u, static_cast<uint32_t>(n));
+    TEST_ASSERT_EQUAL_UINT16(0x0900u, u16(packet));
+    TEST_ASSERT_EQUAL_UINT8(49u, packet[2]);
+    TEST_ASSERT_EQUAL_UINT16(123u, u16(packet + 3));
+    TEST_ASSERT_EQUAL_UINT16(37u, u16(packet + 5));   // Total Energy
+    TEST_ASSERT_EQUAL_UINT16(1023u, u16(packet + 7)); // Energy Per Hour
+    TEST_ASSERT_EQUAL_UINT8(17u, packet[9]);          // Energy Per Minute
+    TEST_ASSERT_EQUAL_UINT16(789u, u16(packet + 10)); // Elapsed Time
+
+    TEST_ASSERT_EQUAL_UINT32(0u, static_cast<uint32_t>(ftms::encodeIndoorRowerData(m, 2, packet, sizeof(packet))));
 }
 
 void test_ftms_encoder_fitness_machine_feature() {
@@ -221,8 +237,9 @@ void test_ftms_encoder_fitness_machine_feature() {
 
     const uint32_t features = static_cast<uint32_t>(packet[0]) | (static_cast<uint32_t>(packet[1]) << 8) |
                                (static_cast<uint32_t>(packet[2]) << 16) | (static_cast<uint32_t>(packet[3]) << 24);
-    // Cadence(bit1) | TotalDistance(bit2) | Pace(bit5) | ElapsedTime(bit12) | PowerMeasurement(bit14)
-    TEST_ASSERT_EQUAL_UINT32((1u << 1) | (1u << 2) | (1u << 5) | (1u << 12) | (1u << 14), features);
+    // Cadence(bit1) | TotalDistance(bit2) | Pace(bit5) | ExpendedEnergy(bit9) |
+    // ElapsedTime(bit12) | PowerMeasurement(bit14)
+    TEST_ASSERT_EQUAL_UINT32((1u << 1) | (1u << 2) | (1u << 5) | (1u << 9) | (1u << 12) | (1u << 14), features);
 
     const uint32_t targetSettingFeatures = static_cast<uint32_t>(packet[4]) |
                                             (static_cast<uint32_t>(packet[5]) << 8) |
@@ -234,17 +251,23 @@ void test_ftms_encoder_fitness_machine_feature() {
 void test_ftms_control_point_acknowledges_mandatory_op_codes() {
     using ftms::control_point::OpCode;
     using ftms::control_point::ResultCode;
+    using ftms::control_point::resultFor;
 
-    TEST_ASSERT_TRUE(
-        ResultCode::Success == ftms::control_point::resultFor(static_cast<uint8_t>(OpCode::RequestControl))
-    );
-    TEST_ASSERT_TRUE(ResultCode::Success == ftms::control_point::resultFor(static_cast<uint8_t>(OpCode::Reset)));
-    TEST_ASSERT_TRUE(
-        ResultCode::Success == ftms::control_point::resultFor(static_cast<uint8_t>(OpCode::StartOrResume))
-    );
-    TEST_ASSERT_TRUE(ResultCode::Success == ftms::control_point::resultFor(static_cast<uint8_t>(OpCode::StopOrPause))
-    );
-    TEST_ASSERT_TRUE(ResultCode::OpCodeNotSupported == ftms::control_point::resultFor(0x04)); // Set Target Power
+    const uint8_t requestControl[] = {static_cast<uint8_t>(OpCode::RequestControl)};
+    const uint8_t reset[] = {static_cast<uint8_t>(OpCode::Reset)};
+    const uint8_t start[] = {static_cast<uint8_t>(OpCode::StartOrResume)};
+    const uint8_t stop[] = {static_cast<uint8_t>(OpCode::StopOrPause), ftms::control_point::kStop};
+    const uint8_t pause[] = {static_cast<uint8_t>(OpCode::StopOrPause), ftms::control_point::kPause};
+    const uint8_t stopNoParam[] = {static_cast<uint8_t>(OpCode::StopOrPause)};
+    const uint8_t setTargetPower[] = {0x04, 0x64, 0x00};
+
+    TEST_ASSERT_TRUE(ResultCode::Success == resultFor(requestControl, sizeof(requestControl)));
+    TEST_ASSERT_TRUE(ResultCode::Success == resultFor(reset, sizeof(reset)));
+    TEST_ASSERT_TRUE(ResultCode::Success == resultFor(start, sizeof(start)));
+    TEST_ASSERT_TRUE(ResultCode::Success == resultFor(stop, sizeof(stop)));
+    TEST_ASSERT_TRUE(ResultCode::Success == resultFor(pause, sizeof(pause)));
+    TEST_ASSERT_TRUE(ResultCode::InvalidParameter == resultFor(stopNoParam, sizeof(stopNoParam)));
+    TEST_ASSERT_TRUE(ResultCode::OpCodeNotSupported == resultFor(setTargetPower, sizeof(setTargetPower)));
 
     uint8_t response[3] = {0};
     const size_t n = ftms::control_point::encodeResponse(0x04, ResultCode::OpCodeNotSupported, response, sizeof(response));
@@ -252,6 +275,65 @@ void test_ftms_control_point_acknowledges_mandatory_op_codes() {
     TEST_ASSERT_EQUAL_HEX8(0x80u, response[0]);
     TEST_ASSERT_EQUAL_HEX8(0x04u, response[1]);
     TEST_ASSERT_EQUAL_HEX8(0x02u, response[2]);
+}
+
+void test_ftms_status_encoding() {
+    using ftms::status::Event;
+    uint8_t out[2] = {0};
+    TEST_ASSERT_EQUAL_UINT32(1u, static_cast<uint32_t>(ftms::status::encode(Event::Reset, 0, out, sizeof(out))));
+    TEST_ASSERT_EQUAL_HEX8(0x01u, out[0]);
+    TEST_ASSERT_EQUAL_UINT32(2u, static_cast<uint32_t>(ftms::status::encode(Event::StoppedOrPausedByUser,
+                                                                            ftms::control_point::kPause, out, sizeof(out))));
+    TEST_ASSERT_EQUAL_HEX8(0x02u, out[0]);
+    TEST_ASSERT_EQUAL_HEX8(0x02u, out[1]);
+    TEST_ASSERT_EQUAL_UINT32(1u, static_cast<uint32_t>(ftms::status::encode(Event::StartedOrResumedByUser, 0, out, sizeof(out))));
+    TEST_ASSERT_EQUAL_HEX8(0x04u, out[0]);
+}
+
+void test_session_averages_and_energy() {
+    MetricsModel model(cfg::PulseMode::Stroke);
+
+    // 11 strokes 2.5 s apart (24 spm), ticking every 50 ms like the main loop.
+    uint32_t nowMs = 1000;
+    for (int i = 0; i <= 10; i++) {
+        model.onPulseMicros(nowMs * 1000u, nowMs);
+        for (int t = 0; t < 50; t++) {
+            nowMs += 50;
+            model.tick(nowMs);
+        }
+    }
+    const RowerMetrics& m = model.metrics();
+    const float elapsed = static_cast<float>(nowMs - 1000u) / 1000.0f;
+    TEST_ASSERT_FLOAT_WITHIN(0.5f, 11.0f * 60.0f / elapsed, m.avgStrokeRateSpm);
+    TEST_ASSERT_FLOAT_WITHIN(1.0f, 500.0f * elapsed / m.distanceMeters, m.avgSplitSecPer500m);
+    // Rowing the whole time: at least the 300 kcal/h base rate.
+    TEST_ASSERT_TRUE(m.energyKcal >= 300.0f * (elapsed - 0.1f) / 3600.0f);
+    TEST_ASSERT_FLOAT_WITHIN(1.0f, 4.0f * 0.8604f * m.powerWatts + 300.0f, m.energyPerHourKcal);
+}
+
+void test_pause_freezes_session_time_and_ignores_pulses() {
+    MetricsModel model(cfg::PulseMode::Stroke);
+    model.onPulseMicros(1000000u, 1000u);
+    model.tick(1050u);
+    model.onPulseMicros(3000000u, 3000u);
+    model.tick(4000u);
+    TEST_ASSERT_EQUAL_UINT32(3u, model.metrics().elapsedSec);
+
+    model.pause(4000u);
+    TEST_ASSERT_TRUE(model.metrics().paused);
+    TEST_ASSERT_TRUE(model.metrics().phase == RowerPhase::Idle);
+    model.onPulseMicros(5000000u, 5000u); // ignored
+    model.tick(60000u);
+    TEST_ASSERT_EQUAL_UINT32(2u, model.metrics().strokeCount);
+    TEST_ASSERT_EQUAL_UINT32(3u, model.metrics().elapsedSec);
+
+    // 56 s paused; after resume the clock carries on from 3 s.
+    model.resume(60000u);
+    TEST_ASSERT_FALSE(model.metrics().paused);
+    model.onPulseMicros(61000000u, 61000u);
+    model.tick(62000u);
+    TEST_ASSERT_EQUAL_UINT32(3u, model.metrics().strokeCount);
+    TEST_ASSERT_EQUAL_UINT32(5u, model.metrics().elapsedSec);
 }
 
 int main(int, char **) {
@@ -264,5 +346,8 @@ int main(int, char **) {
     RUN_TEST(test_ftms_encoder_packet_shape);
     RUN_TEST(test_ftms_encoder_fitness_machine_feature);
     RUN_TEST(test_ftms_control_point_acknowledges_mandatory_op_codes);
+    RUN_TEST(test_ftms_status_encoding);
+    RUN_TEST(test_session_averages_and_energy);
+    RUN_TEST(test_pause_freezes_session_time_and_ignores_pulses);
     return UNITY_END();
 }

@@ -6,19 +6,30 @@ namespace {
 
 // Rower Data (0x2AD1) flags bits, per Bluetooth GATT Specification
 // Supplement sec. 3.212.1. Bit 0 means "More Data" - when SET, Stroke Rate
-// and Stroke Count are OMITTED from the packet. We always send them, so bit
-// 0 must stay clear; getting this backwards (as an earlier version of this
-// file did) makes any spec-conformant parser misread every byte after the
-// flags field, since it would expect Average Stroke Rate first instead.
+// and Stroke Count are OMITTED from the packet (getting this backwards, as
+// an earlier version of this file did, makes any spec-conformant parser
+// misread every byte after the flags field). Part 0 sets it, part 1 clears
+// it and carries them.
+constexpr uint16_t kFlagMoreData = (1u << 0);
 constexpr uint16_t kFlagAvgStrokeRate = (1u << 1);
 constexpr uint16_t kFlagTotalDistance = (1u << 2);
 constexpr uint16_t kFlagInstPace = (1u << 3);
 constexpr uint16_t kFlagAvgPace = (1u << 4);
 constexpr uint16_t kFlagInstPower = (1u << 5);
+constexpr uint16_t kFlagExpendedEnergy = (1u << 8);
 constexpr uint16_t kFlagElapsedTime = (1u << 11);
 
-constexpr uint16_t kFlags =
-    kFlagAvgStrokeRate | kFlagTotalDistance | kFlagInstPace | kFlagAvgPace | kFlagInstPower | kFlagElapsedTime;
+constexpr uint16_t kPart0Flags =
+    kFlagMoreData | kFlagAvgStrokeRate | kFlagTotalDistance | kFlagInstPace | kFlagAvgPace | kFlagInstPower;
+constexpr uint16_t kPart1Flags = kFlagExpendedEnergy | kFlagElapsedTime;
+
+uint16_t clampU16(float v) {
+    return v <= 0.0f ? 0 : (v >= 65535.0f ? 65535 : static_cast<uint16_t>(v));
+}
+
+uint8_t clampU8(float v) {
+    return v <= 0.0f ? 0 : (v >= 255.0f ? 255 : static_cast<uint8_t>(v));
+}
 
 void putU16(uint8_t*& p, uint16_t v) {
     *p++ = static_cast<uint8_t>(v & 0xFF);
@@ -44,34 +55,31 @@ void putU32(uint8_t*& p, uint32_t v) {
 
 } // namespace
 
-size_t encodeIndoorRowerData(const RowerMetrics& m, uint8_t* out, size_t cap) {
-    constexpr size_t kSize = 17; // 2+1+2+1+3+2+2+2+2, see field list below.
-    if (cap < kSize) {
+size_t encodeIndoorRowerData(const RowerMetrics& m, int part, uint8_t* out, size_t cap) {
+    constexpr size_t kSize = 12; // both parts, see the field lists below
+    if (cap < kSize || part < 0 || part >= kRowerDataParts) {
         return 0;
     }
 
     uint8_t* p = out;
-    putU16(p, kFlags);
-
-    // Stroke Rate (0.5 spm resolution) + Stroke Count - unconditional,
-    // since flags bit 0 ("More Data") is clear.
-    *p++ = static_cast<uint8_t>(m.strokeRateSpm * 2.0f);
-    putU16(p, static_cast<uint16_t>(m.strokeCount & 0xFFFF));
-
-    // Average Stroke Rate: no separate running average tracked yet, so this
-    // is the same placeholder simplification as Average Pace below.
-    *p++ = static_cast<uint8_t>(m.strokeRateSpm * 2.0f);
-
-    putU24(p, static_cast<uint32_t>(m.distanceMeters));
-
-    const uint16_t pace = static_cast<uint16_t>(m.splitSecPer500m);
-    putU16(p, pace); // Instantaneous Pace
-    putU16(p, pace); // Average Pace placeholder: same as instantaneous.
-
-    putI16(p, static_cast<int16_t>(m.powerWatts));
-
-    putU16(p, static_cast<uint16_t>(m.elapsedSec));
-
+    if (part == 0) {
+        putU16(p, kPart0Flags);
+        *p++ = clampU8(m.avgStrokeRateSpm * 2.0f); // 0.5 spm resolution
+        putU24(p, static_cast<uint32_t>(m.distanceMeters));
+        putU16(p, clampU16(m.splitSecPer500m));    // Instantaneous Pace
+        putU16(p, clampU16(m.avgSplitSecPer500m)); // Average Pace
+        putI16(p, static_cast<int16_t>(m.powerWatts));
+    } else {
+        putU16(p, kPart1Flags);
+        // Stroke Rate (0.5 spm resolution) + Stroke Count: present because
+        // "More Data" is clear.
+        *p++ = clampU8(m.strokeRateSpm * 2.0f);
+        putU16(p, static_cast<uint16_t>(m.strokeCount & 0xFFFF));
+        putU16(p, clampU16(m.energyKcal));               // Total Energy
+        putU16(p, clampU16(m.energyPerHourKcal));        // Energy Per Hour
+        *p++ = clampU8(m.energyPerHourKcal / 60.0f);     // Energy Per Minute
+        putU16(p, static_cast<uint16_t>(m.elapsedSec));
+    }
     return static_cast<size_t>(p - out);
 }
 
@@ -86,11 +94,12 @@ size_t encodeFitnessMachineFeature(uint8_t* out, size_t cap) {
     constexpr uint32_t kCadenceSupported = (1u << 1);
     constexpr uint32_t kTotalDistanceSupported = (1u << 2);
     constexpr uint32_t kPaceSupported = (1u << 5);
+    constexpr uint32_t kExpendedEnergySupported = (1u << 9);
     constexpr uint32_t kElapsedTimeSupported = (1u << 12);
     constexpr uint32_t kPowerMeasurementSupported = (1u << 14);
     constexpr uint32_t kFeatures =
-        kCadenceSupported | kTotalDistanceSupported | kPaceSupported | kElapsedTimeSupported |
-        kPowerMeasurementSupported;
+        kCadenceSupported | kTotalDistanceSupported | kPaceSupported | kExpendedEnergySupported |
+        kElapsedTimeSupported | kPowerMeasurementSupported;
 
     // Target Setting Features: left at 0 since we don't implement any
     // Control Point "Set Target" op codes. Setting a bit here without
@@ -117,18 +126,39 @@ size_t encodeResponse(uint8_t requestOpCode, ResultCode result, uint8_t* out, si
     return kSize;
 }
 
-ResultCode resultFor(uint8_t requestOpCode) {
-    switch (static_cast<OpCode>(requestOpCode)) {
+ResultCode resultFor(const uint8_t* data, size_t len) {
+    if (data == nullptr || len == 0) {
+        return ResultCode::InvalidParameter;
+    }
+    switch (static_cast<OpCode>(data[0])) {
         case OpCode::RequestControl:
         case OpCode::Reset:
         case OpCode::StartOrResume:
-        case OpCode::StopOrPause:
             return ResultCode::Success;
+        case OpCode::StopOrPause:
+            return len >= 2 && (data[1] == kStop || data[1] == kPause) ? ResultCode::Success
+                                                                        : ResultCode::InvalidParameter;
         default:
             return ResultCode::OpCodeNotSupported;
     }
 }
 
 } // namespace control_point
+
+namespace status {
+
+size_t encode(Event event, uint8_t parameter, uint8_t* out, size_t cap) {
+    const size_t size = event == Event::StoppedOrPausedByUser ? 2 : 1;
+    if (cap < size) {
+        return 0;
+    }
+    out[0] = static_cast<uint8_t>(event);
+    if (size == 2) {
+        out[1] = parameter;
+    }
+    return size;
+}
+
+} // namespace status
 
 } // namespace ftms

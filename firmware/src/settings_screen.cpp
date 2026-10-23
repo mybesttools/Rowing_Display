@@ -18,7 +18,7 @@ using settings::Settings;
 
 // A numeric setting edited with -/+ buttons. Floats step by a percentage of
 // their value (inertia ranges 0.1 to 1.9 between machines), ints by a fixed
-// amount.
+// amount. Splits are whole seconds shown as m:ss, with 0 meaning off.
 struct NumField {
     const char* name;
     const char* hint;
@@ -28,7 +28,12 @@ struct NumField {
     float step; // ints: absolute; floats: fraction of the value
     float min;
     float max;
+    bool isSplit = false;
 };
+
+// Pace boat: from off, + jumps to this; below kMinSplitSec, - turns it off.
+constexpr float kFirstSplitSec = 150.0f;
+constexpr float kMinSplitSec = 60.0f;
 
 const NumField kMachineFields[] = {
     {"Pulses per wheel turn", "magnets passing the sensor per turn",
@@ -60,11 +65,22 @@ const NumField kSensorFields[] = {
      [](Settings& s, float v) { s.sensorParams.debounceMs = uint16_t(v); }, false, 1, 0, 100},
 };
 
+const NumField kWorkoutFields[] = {
+    {"Pace boat", "target split /500m; it rows beside you, off = none",
+     [](const Settings& s) { return float(s.paceBoatSplitSec); },
+     [](Settings& s, float v) { s.paceBoatSplitSec = uint16_t(v); }, false, 1, 0, 599, true},
+};
+
 constexpr int kMachineFieldCount = sizeof(kMachineFields) / sizeof(kMachineFields[0]);
-constexpr int kFieldCount = kMachineFieldCount + sizeof(kSensorFields) / sizeof(kSensorFields[0]);
+constexpr int kSensorFieldCount = sizeof(kSensorFields) / sizeof(kSensorFields[0]);
+constexpr int kWorkoutFieldStart = kMachineFieldCount + kSensorFieldCount;
+constexpr int kFieldCount = kWorkoutFieldStart + sizeof(kWorkoutFields) / sizeof(kWorkoutFields[0]);
 
 const NumField& field(int i) {
-    return i < kMachineFieldCount ? kMachineFields[i] : kSensorFields[i - kMachineFieldCount];
+    if (i < kMachineFieldCount) {
+        return kMachineFields[i];
+    }
+    return i < kWorkoutFieldStart ? kSensorFields[i - kMachineFieldCount] : kWorkoutFields[i - kWorkoutFieldStart];
 }
 
 enum DropdownId : intptr_t { kDdMachine, kDdSensor, kDdMode, kDdInput, kDdBackground };
@@ -80,7 +96,14 @@ lv_obj_t* g_ddInput = nullptr;
 lv_obj_t* g_ddBackground = nullptr;
 
 void formatValue(char* out, size_t cap, const NumField& f, float v) {
-    if (f.isFloat) {
+    if (f.isSplit) {
+        const int sec = static_cast<int>(lroundf(v));
+        if (sec == 0) {
+            snprintf(out, cap, "off");
+        } else {
+            snprintf(out, cap, "%d:%02d", sec / 60, sec % 60);
+        }
+    } else if (f.isFloat) {
         snprintf(out, cap, "%.3g", v);
     } else {
         snprintf(out, cap, "%d", static_cast<int>(lroundf(v)));
@@ -146,8 +169,13 @@ void onStep(lv_event_t* e) {
         char buf[16];
         snprintf(buf, sizeof(buf), "%.3g", v);
         v = strtof(buf, nullptr);
+    } else if (f.isSplit && v == 0.0f) {
+        v = up ? kFirstSplitSec : 0.0f;
     } else {
         v += up ? f.step : -f.step;
+        if (f.isSplit && v < kMinSplitSec) {
+            v = 0.0f;
+        }
     }
     if (v < f.min) {
         v = f.min;
@@ -190,9 +218,10 @@ void onDropdown(lv_event_t* e) {
 }
 
 void onReset(lv_event_t*) {
-    // Machine/sensor defaults only; the background is a matter of taste.
+    // Machine/sensor defaults only; background and pace boat are kept.
     Settings reset = settings::defaults(g_edit.machine, g_edit.sensor);
     memcpy(reset.background, g_edit.background, sizeof(reset.background));
+    reset.paceBoatSplitSec = g_edit.paceBoatSplitSec;
     g_edit = reset;
     refresh();
 }
@@ -364,7 +393,12 @@ lv_obj_t* build(DoneCallback onDone) {
 #if defined(ROWING_BOARD_LCD_5)
     g_ddInput = makeDropdownRow(list, "Input terminal", "sensor wired between this and GND", "DI0\nDI1", kDdInput);
 #endif
-    for (int i = kMachineFieldCount; i < kFieldCount; i++) {
+    for (int i = kMachineFieldCount; i < kWorkoutFieldStart; i++) {
+        makeNumberRow(list, i);
+    }
+
+    makeSection(list, "WORKOUT");
+    for (int i = kWorkoutFieldStart; i < kFieldCount; i++) {
         makeNumberRow(list, i);
     }
 

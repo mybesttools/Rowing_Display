@@ -358,6 +358,69 @@ drag factor visibly locks onto a stable value across strokes once a few
 clean recovery phases are seen, and stays put through further noisy input —
 the R²/plausibility gating is doing its job.
 
+### Session averages, calories, pause (implemented)
+
+`MetricsModel` keeps session averages (pace = elapsed time / distance, rate =
+strokes / elapsed minutes) and energy with Concept2's estimate, kcal/h =
+4 × 0.8604 × W + 300, accumulated while rowing. `pause()`/`resume()` freeze
+the session; elapsed time skips the pause. Shown on screen as "avg m:ss | N
+spm" under the split and a KCAL tile.
+
+### FTMS data and app control (implemented)
+
+Indoor Rower Data goes out as two 12-byte notifications every 200 ms (the
+first with "More Data" set), so it fits the 20-byte payload of the default
+ATT MTU: part 0 = average rate, distance, pace, average pace, power; part 1 =
+rate, stroke count, total energy / per hour / per minute, elapsed time.
+Feature bit 9 (expended energy) is set. Control Point commands now act on
+the session (`main.cpp`): Start opens the session screen and starts a
+session (or resumes a paused one), Stop/Pause with parameter 1 stops (and
+saves, below) or 2 pauses, Reset zeroes the session. A StopOrPause without
+a parameter is answered InvalidParameter. Every change, from the app or the
+display, is reported on Fitness Machine Status (0x2ADA): 0x01 reset, 0x02
+stopped/paused + parameter, 0x04 started/resumed. RequestControl isn't
+enforced (compatibility over spec purity, as before).
+
+### Session files on the SD card (implemented)
+
+`session_log.cpp` samples the session once per second (PSRAM, up to 4 h)
+and, when it ends (X button or an app's Stop), writes
+`/sessions/<UTC start>.tcx` on the card: one lap with time, distance,
+calories, average cadence and average watts, and a trackpoint per second
+(distance, cadence, watts). Sport is "Other" (TCX has no rowing); set the
+type after uploading. Sessions without a stroke aren't written. The banner
+says "saved <file>", "no SD card" or "saving failed".
+
+Card access at run time (`sd_card.cpp`) on the 5" board pauses DI polling
+and puts the CH422G in output mode for the mount (DI latches low first;
+`sensor_input::takeExpanderForOutput()`), then back to input. The poll task
+re-checks the pause flag after taking the I2C lock so it never reads the
+output latch as a pulse. Measured: ~1.9 s mount, ~5 s for the whole save
+(FAT32 free-space scan on first write), polling resumes at the normal rate
+with no I2C errors.
+
+**Clock:** the 5" board's PCF85063 RTC (I2C 0x51, CR927 cell) is read at
+boot (`rtc_clock.cpp`; seconds bit 7 = oscillator stopped = not set; years
+from 2000). Set it once with `scripts/set_clock.py --port …`. Without a set
+clock files are named `session-NNN.tcx` and timestamped from 2000-01-01. The
+7" board has no RTC known to this firmware: set the clock after each boot.
+
+**USB serial commands** (one per line): `T<unix seconds>` sets the clock,
+`S`/`E` start/end a session, `P` is one sensor pulse.
+`scripts/sim_row.py --port … --strokes 20` rows a simulated session with
+them, for testing at a desk.
+
+### Pace boat (implemented)
+
+Settings → WORKOUT → Pace boat: a target split (off by default; + from off
+starts at 2:30, - below 1:00 turns it off). During a session a translucent
+single sculler (`pace_boat.cpp`) rows that split in the lane 4.5 m to the
+right, positioned with the scene camera (`rower_scene::project()`) and drawn
+over each frame in the present buffer. Its oars swing at 24 spm. It starts
+level when the session clock starts and drops out of view about 2.5 m
+behind. The label under the top bar reads "PACE 2:30 +12 m" (green: you're
+ahead; orange: behind).
+
 ### On-device UI (implemented)
 
 `firmware/src/panel_runtime.cpp` now renders a real LVGL screen instead of

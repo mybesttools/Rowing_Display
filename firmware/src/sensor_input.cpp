@@ -73,6 +73,7 @@ constexpr UBaseType_t kQueueLen = 64;
 
 esp_expander::Base* g_expander = nullptr;
 QueueHandle_t g_edges = nullptr;
+volatile bool g_pollingPaused = false;
 
 // CH422G only reports real pin levels on RD_IO while IO0-7 are in input mode
 // (IO_OE=0); in output mode it reads back its own latch (always 1). The board
@@ -97,8 +98,17 @@ void pollTask(void*) {
         vTaskDelayUntil(&wake, pdMS_TO_TICKS(kPollPeriodMs));
         const uint32_t nowMs = millis();
 
+        if (g_pollingPaused) {
+            continue;
+        }
         if (!esp_lv_adapter_i2c_lock(10)) {
             g_stats.lockFails++;
+            continue;
+        }
+        if (g_pollingPaused) {
+            // takeExpanderForOutput() won the lock: the pin now reads its
+            // output latch, not the terminal.
+            esp_lv_adapter_i2c_unlock();
             continue;
         }
         const int level = g_expander->digitalRead(g_expanderPin);
@@ -139,6 +149,37 @@ void pollImpl(uint32_t /*nowMs*/) {
     g_expander = expander;
     g_edges = xQueueCreate(kQueueLen, sizeof(Edge));
     xTaskCreatePinnedToCore(pollTask, "di_poll", 3072, nullptr, 5, nullptr, 0);
+}
+
+bool takeExpanderImpl() {
+    if (g_expander == nullptr) {
+        return true;
+    }
+    g_pollingPaused = true;
+    if (!esp_lv_adapter_i2c_lock(200)) {
+        g_pollingPaused = false;
+        return false;
+    }
+    // Output mode first: the driver refuses to set levels on input pins.
+    auto* ch422g = static_cast<esp_expander::CH422G*>(g_expander);
+    const bool ok = ch422g->enableAllIO_Output() && ch422g->digitalWrite(cfg::DI0_EXPANDER_PIN, LOW) &&
+                    ch422g->digitalWrite(cfg::DI1_EXPANDER_PIN, LOW);
+    esp_lv_adapter_i2c_unlock();
+    if (!ok) {
+        switchToInput(g_expander);
+        g_pollingPaused = false;
+    }
+    return ok;
+}
+
+void releaseExpanderImpl() {
+    if (g_expander == nullptr) {
+        return;
+    }
+    if (!switchToInput(g_expander)) {
+        printf("sensor: expander back to input mode failed\n");
+    }
+    g_pollingPaused = false;
 }
 
 bool consumeImpl(uint32_t& outPulseMicros) {
@@ -211,6 +252,20 @@ void poll(uint32_t nowMs) {
 
 bool consumePulse(uint32_t& outPulseMicros) {
     return consumeImpl(outPulseMicros);
+}
+
+bool takeExpanderForOutput() {
+#if !defined(SIMULATION_MODE) && defined(ROWING_BOARD_LCD_5)
+    return takeExpanderImpl();
+#else
+    return true;
+#endif
+}
+
+void releaseExpander() {
+#if !defined(SIMULATION_MODE) && defined(ROWING_BOARD_LCD_5)
+    releaseExpanderImpl();
+#endif
 }
 
 PollStats takePollStats() {

@@ -51,7 +51,17 @@ pio test -e native-test                 # run the metrics-model unit tests
 
 # pull the on-device pulse log after a session
 ~/.platformio/penv/bin/python scripts/fetch_pulse_log.py --port /dev/cu.usbmodemXXXX
+
+# set the clock used for session files (once on the 5" board: it has an RTC)
+~/.platformio/penv/bin/python scripts/set_clock.py --port /dev/cu.usbmodemXXXX
+
+# row a simulated session over USB (no rower needed)
+~/.platformio/penv/bin/python scripts/sim_row.py --port /dev/cu.usbmodemXXXX --strokes 20
 ```
+
+Each session is saved to the SD card as `/sessions/<date>_<time>.tcx` when
+it ends; upload it to Strava, Intervals.icu or Garmin Connect and set the
+activity type to rowing.
 
 ## Backgrounds
 

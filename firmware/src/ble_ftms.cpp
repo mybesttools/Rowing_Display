@@ -14,12 +14,28 @@ constexpr char FTMS_STATUS_CHAR_UUID[] = "2ADA";
 
 NimBLECharacteristic* g_rowerChar = nullptr;
 NimBLECharacteristic* g_controlPointChar = nullptr;
+NimBLECharacteristic* g_statusChar = nullptr;
+QueueHandle_t g_commands = nullptr;
 
-// Fitness Machine Control Point handler. We don't implement real machine
-// control, but every write must get an indication back (FTMS spec sec.
-// 4.16) or clients that write here as part of their connect handshake (as
-// EXR does) stall waiting for a response. See ftms_encoder.h for the op
-// codes/result codes this acknowledges.
+BleFtmsService::Command commandFor(const uint8_t* data) {
+    using ftms::control_point::OpCode;
+    switch (static_cast<OpCode>(data[0])) {
+        case OpCode::Reset:
+            return BleFtmsService::Command::Reset;
+        case OpCode::StartOrResume:
+            return BleFtmsService::Command::Start;
+        case OpCode::StopOrPause:
+            return data[1] == ftms::control_point::kStop ? BleFtmsService::Command::Stop
+                                                         : BleFtmsService::Command::Pause;
+        default:
+            return BleFtmsService::Command::None;
+    }
+}
+
+// Fitness Machine Control Point handler. Every write must get an indication
+// back (FTMS spec sec. 4.16) or clients that write here as part of their
+// connect handshake (as EXR does) stall waiting for a response. Accepted
+// session commands are queued for the main loop (takeCommand()).
 class ControlPointCallbacks : public NimBLECharacteristicCallbacks {
     void onWrite(NimBLECharacteristic* characteristic, NimBLEConnInfo& /*connInfo*/) override {
         const NimBLEAttValue value = characteristic->getValue();
@@ -28,7 +44,13 @@ class ControlPointCallbacks : public NimBLECharacteristicCallbacks {
         }
 
         const uint8_t requestOpCode = value.data()[0];
-        const ftms::control_point::ResultCode result = ftms::control_point::resultFor(requestOpCode);
+        const ftms::control_point::ResultCode result = ftms::control_point::resultFor(value.data(), value.length());
+        if (result == ftms::control_point::ResultCode::Success) {
+            const BleFtmsService::Command command = commandFor(value.data());
+            if (command != BleFtmsService::Command::None && g_commands != nullptr) {
+                xQueueSend(g_commands, &command, 0);
+            }
+        }
 
         uint8_t response[3] = {0};
         const size_t size = ftms::control_point::encodeResponse(requestOpCode, result, response, sizeof(response));
@@ -45,6 +67,7 @@ ControlPointCallbacks g_controlPointCallbacks;
 } // namespace
 
 void BleFtmsService::begin(const String& deviceName) {
+    g_commands = xQueueCreate(8, sizeof(Command));
     NimBLEDevice::init(deviceName.c_str());
 
     NimBLEServer* server = NimBLEDevice::createServer();
@@ -77,11 +100,9 @@ void BleFtmsService::begin(const String& deviceName) {
     );
     g_controlPointChar->setCallbacks(&g_controlPointCallbacks);
 
-    // Status: mandatory once Control Point is present. We don't currently
-    // drive any notifications on it (no machine state changes to report
-    // yet) - existing as a notify-capable characteristic is spec-legal on
-    // its own.
-    service->createCharacteristic(FTMS_STATUS_CHAR_UUID, NIMBLE_PROPERTY::NOTIFY);
+    // Status: mandatory once Control Point is present; reports session
+    // reset/start/stop/pause (notifyStatus()).
+    g_statusChar = service->createCharacteristic(FTMS_STATUS_CHAR_UUID, NIMBLE_PROPERTY::NOTIFY);
 
     NimBLEAdvertising* advertising = NimBLEDevice::getAdvertising();
     advertising->addServiceUUID(FTMS_SERVICE_UUID);
@@ -103,12 +124,34 @@ void BleFtmsService::notify(const RowerMetrics& metrics) {
         return;
     }
 
-    uint8_t payload[24] = {0};
-    const size_t size = ftms::encodeIndoorRowerData(metrics, payload, sizeof(payload));
+    uint8_t payload[20] = {0};
+    for (int part = 0; part < ftms::kRowerDataParts; part++) {
+        const size_t size = ftms::encodeIndoorRowerData(metrics, part, payload, sizeof(payload));
+        if (size == 0) {
+            return;
+        }
+        g_rowerChar->setValue(payload, size);
+        g_rowerChar->notify();
+    }
+}
+
+BleFtmsService::Command BleFtmsService::takeCommand() {
+    Command command = Command::None;
+    if (g_commands != nullptr) {
+        xQueueReceive(g_commands, &command, 0);
+    }
+    return command;
+}
+
+void BleFtmsService::notifyStatus(ftms::status::Event event, uint8_t parameter) {
+    if (!ready_ || g_statusChar == nullptr) {
+        return;
+    }
+    uint8_t payload[2] = {0};
+    const size_t size = ftms::status::encode(event, parameter, payload, sizeof(payload));
     if (size == 0) {
         return;
     }
-
-    g_rowerChar->setValue(payload, size);
-    g_rowerChar->notify();
+    g_statusChar->setValue(payload, size);
+    g_statusChar->notify();
 }
