@@ -79,6 +79,15 @@ void syncClock(const settings::Settings& s) {
     net_time::startSync(s.wifiSsid, s.wifiPassword, timezones::zone(s.timezone).posix);
 }
 
+// Weekly is plenty for an RTC (drifts seconds a week), and keeps the radio,
+// which disturbs the RGB panel, off nearly all the time.
+constexpr time_t kClockSyncIntervalSec = 7 * 24 * 3600;
+constexpr uint32_t kClockSyncCheckMs = 60UL * 60UL * 1000UL;
+
+bool clockSyncDue() {
+    return !rtc_clock::valid() || time(nullptr) - rtc_clock::lastSet() >= kClockSyncIntervalSec;
+}
+
 void startSession(uint32_t nowMs) {
     g_model.reset();
     session_log::start();
@@ -134,6 +143,7 @@ void pollSerialCommands(uint32_t nowMs) {
             line[len] = '\0';
             if (len > 1 && line[0] == 'T') {
                 rtc_clock::set(static_cast<time_t>(strtoll(line + 1, nullptr, 10)));
+                panel_runtime::resyncDisplay(); // the NVS write stalled PSRAM
             } else if (len == 1 && line[0] == 'S') {
                 panel_runtime::showSession();
                 startSession(nowMs);
@@ -221,7 +231,13 @@ void setup() {
            static_cast<unsigned>(heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL)),
            static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_SPIRAM)));
     // Wi-Fi only for this, and off again once the clock is set (net_time.h).
-    syncClock(settings::current());
+    if (clockSyncDue()) {
+        syncClock(settings::current());
+    } else {
+        printf("clock: last set %ld h ago, next sync in %ld h\n",
+               static_cast<long>((time(nullptr) - rtc_clock::lastSet()) / 3600),
+               static_cast<long>((rtc_clock::lastSet() + kClockSyncIntervalSec - time(nullptr)) / 3600));
+    }
 
     printf("Rowing display starter scaffold ready\n");
 }
@@ -292,6 +308,15 @@ void loop() {
             sensor_input::takePollStats();
         }
     }
+    // Weekly clock sync for a display that stays on, never mid-session.
+    static uint32_t lastSyncCheckMs = nowMs;
+    if (nowMs - lastSyncCheckMs >= kClockSyncCheckMs) {
+        lastSyncCheckMs = nowMs;
+        if (!g_sessionActive && !net_time::busy() && clockSyncDue()) {
+            syncClock(settings::current());
+        }
+    }
+
     if (pulse_log::poll(nowMs, sinceLastPulseMs >= 5000)) {
         panel_runtime::resyncDisplay();
     }

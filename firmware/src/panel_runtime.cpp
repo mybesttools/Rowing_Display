@@ -716,7 +716,11 @@ void update(const RowerMetrics& metrics) {
             shownMinute = local.tm_min;
             char clock[32];
             strftime(clock, sizeof(clock), "%a %d %b  %H:%M", &local);
-            lv_label_set_text(g_homeClock, clock);
+            if (rtc_clock::batteryProblem()) {
+                lv_label_set_text_fmt(g_homeClock, "%s\n" LV_SYMBOL_WARNING " clock battery?", clock);
+            } else {
+                lv_label_set_text(g_homeClock, clock);
+            }
         }
     }
 

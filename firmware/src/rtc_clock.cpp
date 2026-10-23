@@ -7,6 +7,8 @@
 #include <cstdint>
 #include <cstdio>
 
+#include <Preferences.h>
+
 #if !defined(SIMULATION_MODE)
 #include "driver/i2c.h"
 #include "esp_lv_adapter_arduino.h"
@@ -18,6 +20,31 @@ namespace {
 
 // 2025-01-01T00:00:00Z: anything earlier is the unset clock.
 constexpr time_t kEarliestValid = 1735689600;
+
+constexpr char kNamespace[] = "rowing";
+constexpr char kKeyLastSet[] = "clockSet"; // UTC seconds of the last set()
+
+time_t g_lastSet = 0;
+bool g_batteryProblem = false;
+bool g_rtcStopped = false;
+
+time_t loadLastSet() {
+    Preferences prefs;
+    if (!prefs.begin(kNamespace, true)) {
+        return 0;
+    }
+    const time_t t = static_cast<time_t>(prefs.getULong64(kKeyLastSet, 0));
+    prefs.end();
+    return t;
+}
+
+void storeLastSet(time_t t) {
+    Preferences prefs;
+    if (prefs.begin(kNamespace, false)) {
+        prefs.putULong64(kKeyLastSet, static_cast<uint64_t>(t));
+        prefs.end();
+    }
+}
 
 #if !defined(SIMULATION_MODE)
 
@@ -62,6 +89,7 @@ bool readRtc(time_t& out) {
     }
     if (r[0] & 0x80) {
         printf("clock: RTC not set (oscillator stopped)\n");
+        g_rtcStopped = true;
         return false;
     }
     const int64_t days = daysFromCivil(2000 + fromBcd(r[6]), fromBcd(r[5] & 0x1F), fromBcd(r[3] & 0x3F));
@@ -107,13 +135,26 @@ void printNow(const char* what) {
 } // namespace
 
 void begin() {
+    g_lastSet = loadLastSet();
 #if !defined(SIMULATION_MODE)
     time_t utc = 0;
     if (readRtc(utc) && utc >= kEarliestValid) {
         setSystem(utc);
         printNow("from RTC");
     }
+    if (g_rtcStopped && g_lastSet != 0) {
+        g_batteryProblem = true;
+        printf("clock: time was lost since it was set: clock battery missing or empty\n");
+    }
 #endif
+}
+
+time_t lastSet() {
+    return g_lastSet;
+}
+
+bool batteryProblem() {
+    return g_batteryProblem;
 }
 
 void setTimezone(const char* posix) {
@@ -134,6 +175,8 @@ void set(time_t utc) {
 #if !defined(SIMULATION_MODE)
     writeRtc(utc);
 #endif
+    g_lastSet = utc;
+    storeLastSet(utc);
     printNow("set to");
 }
 

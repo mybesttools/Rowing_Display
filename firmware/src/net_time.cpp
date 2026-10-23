@@ -156,6 +156,9 @@ void sync() {
     printf("wifi: connecting to \"%s\" (password %u characters)\n", g_job.ssid,
            static_cast<unsigned>(strlen(g_job.password)));
     WiFi.mode(WIFI_STA);
+    // No modem sleep: with BLE sharing the radio, the DHCP offer was missed
+    // in about half the attempts. The radio is only on for seconds anyway.
+    WiFi.setSleep(false);
     WiFi.begin(g_job.ssid, g_job.password);
     const uint32_t start = millis();
     uint32_t lastLog = start;

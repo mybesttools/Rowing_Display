@@ -296,8 +296,15 @@ void onWifiTimer(lv_timer_t*) {
         strftime(clock, sizeof(clock), "clock %H:%M", &local);
     }
     const char* status = net_time::statusText();
-    lv_label_set_text_fmt(g_wifiHint, "%s  |  %s", g_edit.wifiSsid[0] != '\0' ? g_edit.wifiSsid : "no network",
-                          status[0] != '\0' && net_time::state() != net_time::State::ScanDone ? status : clock);
+    const bool showStatus = status[0] != '\0' && net_time::state() != net_time::State::ScanDone;
+    char synced[32] = "";
+    if (!showStatus && rtc_clock::lastSet() != 0 && rtc_clock::valid()) {
+        const long days = static_cast<long>((time(nullptr) - rtc_clock::lastSet()) / 86400);
+        snprintf(synced, sizeof(synced), days == 0 ? "  |  set today" : "  |  set %ld days ago", days);
+    }
+    lv_label_set_text_fmt(g_wifiHint, "%s  |  %s%s%s", g_edit.wifiSsid[0] != '\0' ? g_edit.wifiSsid : "no network",
+                          showStatus ? status : clock, synced,
+                          rtc_clock::batteryProblem() ? "\nclock lost its time: battery missing or empty?" : "");
 }
 
 void onWifiSetup(lv_event_t*) {
