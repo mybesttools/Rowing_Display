@@ -91,13 +91,27 @@ On the water after that: the stroke count matched mine, about 73 W at 29 spm, ro
 
 ## Settings on the device
 
-The firmware supports both my machines (the Kuipers AquaRower and a Dunlop air rower) and both sensor types (reed and Hall). Rather than rebuilding firmware for every tweak, there's now a **Settings** screen. You pick the machine and sensor preset, and you can adjust magnets per revolution, inertia, drag factor, debounce and so on with +/− buttons. Values are stored in flash, and edited values are highlighted next to their defaults, so it's always clear what you've changed.
+The firmware supports both my machines (the Kuipers AquaRower and a Dunlop air rower) and both sensor types (reed and Hall). Rather than rebuilding firmware for every tweak, there's now a **Settings** screen. You pick the machine and sensor preset, and you can adjust magnets per revolution, inertia, drag factor, debounce and so on with +/− buttons. Values are stored in flash, and edited values are highlighted next to their defaults, so it's always clear what you've changed. The settings sit behind a menu of six pages (Machine, Stroke detection, Sensor, Workout, Display, Clock & Wi-Fi), each short enough to fit on the screen without scrolling.
 
 ## Phone apps
 
-The old monitor only talked to FitShow. The new display uses **Bluetooth FTMS** (Fitness Machine Service) instead. FTMS is the open standard for gym equipment, so any app that supports FTMS rowers can connect, and you aren't tied to one vendor's app. The display advertises itself as a rower and sends stroke rate, stroke count, distance, pace, power and elapsed time five times a second. The touchscreen keeps working as usual while a phone is connected.
+The old monitor only talked to FitShow. The new display uses **Bluetooth FTMS** (Fitness Machine Service) instead. FTMS is the open standard for gym equipment, so any app that supports FTMS rowers can connect, and you aren't tied to one vendor's app. The display advertises itself as a rower and sends stroke rate and count, distance, live and average pace, average stroke rate, power, calories and elapsed time five times a second. The touchscreen keeps working as usual while a phone is connected.
 
-That part works today. Making apps genuinely good to use is the next stage.
+An app's start, pause, stop and reset buttons now control the session on the display itself: start opens the session screen, pause and stop show a banner, and the display tells the app every change. I tested this end to end from a laptop acting as an app, which also turned up two bugs: the display didn't put its name in its Bluetooth advertisement, so apps would have listed it as an unnamed device, and roughly one data packet in 200 arrived with a corrupted first byte. Both are fixed. Trying the common rowing apps one by one is next.
+
+## Update: backgrounds, session files, a pace boat and a clock
+
+A few things from the "what's next" list are done, plus a couple that weren't on it.
+
+**Your own backgrounds.** One lake is built in; more go on a microSD card in a `backgrounds` folder and can be picked under Settings. A small script turns any calm-water photo into a background file: it guesses the waterline from the reflection (the row the picture mirrors itself best around) and writes a preview so you can check it. The card is only read at boot, because on the 5" board the SD card's chip select sits on the same I/O expander as the sensor input, which runs in input mode while you row.
+
+**Session files.** When a session ends, it's saved to the card as a TCX file, one data point per second with distance, stroke rate and watts. The files pass Garmin's schema check and can be uploaded to Strava, Intervals.icu or Garmin Connect (set the type to rowing after uploading). To reach the card mid-run, the firmware briefly pauses sensor polling and switches the expander back to output mode; saving takes about five seconds.
+
+**Averages and calories** on screen too: an "avg" line under the split and a calories tile, using Concept2's estimate.
+
+**A pace boat.** Set a target split and a translucent sculler rows it in the lane next to you, with a label showing how many metres you're ahead or behind. One lesson: the camera sits behind your stern and sees too narrow a cone to show a boat that's really level with you, so the ghost is drawn six metres further ahead than it is. Level means just past your bow, and the label keeps the true gap.
+
+**A clock.** The board has a real-time clock chip with a coin-cell holder (that's the CR927 in the parts list). The display sets it over Wi-Fi once a week and switches the radio off again after a few seconds, because Wi-Fi traffic competes with the screen for memory bandwidth and visibly shifts the picture. Session files are named in your local time zone. The coin cell's voltage isn't wired to anything the processor can read, so the display can't warn about a flat cell directly. What it can see is that the clock chip stopped after having been set, and then it shows "clock battery?".
 
 ## What's next
 
@@ -108,8 +122,6 @@ That part works today. Making apps genuinely good to use is the next stage.
 ### Better app support
 
 - Test against the common FTMS rowing apps (Kinomap, EXR and others) and fix whatever each one trips over.
-- Send real *average* pace and stroke rate (both currently repeat the live value), plus calories.
-- Let an app's start, stop and reset commands control the session on the display, instead of just acknowledging them.
 
 ### Heart rate
 
@@ -117,8 +129,7 @@ That part works today. Making apps genuinely good to use is the next stage.
 
 ### Workout history without a phone
 
-- Save every session to the board's microSD slot as a standard workout file (TCX or FIT).
-- Later: upload over Wi-Fi to Strava or Intervals.icu, and update the firmware over Wi-Fi as well.
+- Upload the saved TCX sessions over Wi-Fi to Strava or Intervals.icu, and update the firmware over Wi-Fi as well.
 
 ### A small companion web page
 
@@ -128,7 +139,7 @@ That part works today. Making apps genuinely good to use is the next stage.
 
 - **A Hall sensor** to replace the stock reed switch. It's cleaner and doesn't bounce.
 - **Smoother animation.** More stroke frames won't fit in PSRAM, so the next gain has to come from making each frame cheaper.
-- **Workouts on the device:** intervals, target splits, and a pace boat in the lake scene to race against.
+- **More workouts on the device:** intervals and target distances, building on the pace boat.
 
 ## Get the code
 
