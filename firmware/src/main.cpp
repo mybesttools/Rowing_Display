@@ -84,6 +84,7 @@ void syncClock(const settings::Settings& s, bool returnToScreen) {
         return;
     }
     panel_runtime::showSplash("Setting the clock...");
+    delay(500); // let the screen switch finish drawing before the radio starts
     net_time::startSync(s.wifiSsid, s.wifiPassword, timezones::zone(s.timezone).posix);
     char shown[48] = "";
     while (net_time::busy()) {

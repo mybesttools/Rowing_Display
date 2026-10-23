@@ -510,7 +510,13 @@ conversion, frame rendering, splash says "Preparing the scene..."). Later
 syncs (weekly check, SYNC, a new network) also block with the splash up
 and return to the previous screen; the scene animation is paused behind
 it. Never mid-session. Serial `F` forgets the last sync so the next boot
-syncs. Measured boot with a due sync: clock set ~7 s after power-on, then
+syncs. Syncs from the SYNC button failed twice in a row (joined, no
+IP) after the board had idled; fixed with a 500 ms pause after the splash
+appears before the radio starts, a DHCP retry (disconnect + rejoin after
+8 s joined without an address, up to 3 tries in the 30 s budget), and
+waiting for a real IP rather than WL_CONNECTED, which can still read
+connected with 0.0.0.0 right after the previous sync. After that: 10/10
+syncs, IP ~2.9 s after start, including with 2-minute idle gaps. Measured boot with a due sync: clock set ~7 s after power-on, then
 frames in ~7.2 s.
 
 **Schedule:** weekly. At boot only if the clock was last set ≥ 7 days ago

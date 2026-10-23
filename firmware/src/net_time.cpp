@@ -19,6 +19,10 @@ namespace {
 
 // Association plus DHCP.
 constexpr uint32_t kConnectTimeoutMs = 30000;
+// Joined but no DHCP answer after this long: drop the connection and ask
+// again. A stalled DHCP exchange sometimes never recovers on its own (seen
+// on the first syncs after the radio had been off for a while).
+constexpr uint32_t kDhcpRetryMs = 8000;
 // While the radio is on, Wi-Fi buffers in PSRAM compete with the RGB
 // panel's frame DMA and the picture can shift; re-align it this often.
 constexpr uint32_t kResyncEveryMs = 500;
@@ -161,16 +165,31 @@ void sync() {
     WiFi.setSleep(false);
     WiFi.begin(g_job.ssid, g_job.password);
     const uint32_t start = millis();
-    uint32_t lastLog = start;
-    while (WiFi.status() != WL_CONNECTED && millis() - start < kConnectTimeoutMs) {
+    uint32_t attemptStart = start;
+    int attempt = 1;
+    // A real address, not just WL_CONNECTED: right after a previous sync the
+    // status can still read connected with 0.0.0.0.
+    const auto connected = [] { return WiFi.status() == WL_CONNECTED && static_cast<uint32_t>(WiFi.localIP()) != 0; };
+    while (!connected() && millis() - start < kConnectTimeoutMs) {
         waitMs(100);
-        if (millis() - lastLog >= 5000) {
-            lastLog = millis();
-            printf("wifi: status %d\n", static_cast<int>(WiFi.status()));
+        if (g_associated && millis() - attemptStart >= kDhcpRetryMs &&
+            millis() - start + kDhcpRetryMs / 2 < kConnectTimeoutMs) {
             logDhcp();
+            attempt++;
+            printf("wifi: no IP address yet, reconnecting (attempt %d)\n", attempt);
+            setStatus(State::Connecting, "no address yet, retrying...");
+            g_associated = false;
+            WiFi.disconnect();
+            waitMs(300);
+            WiFi.begin(g_job.ssid, g_job.password);
+            attemptStart = millis();
         }
     }
-    if (WiFi.status() != WL_CONNECTED) {
+    if (connected()) {
+        printf("wifi: got %s after %lu ms (attempt %d)\n", WiFi.localIP().toString().c_str(),
+               static_cast<unsigned long>(millis() - start), attempt);
+    }
+    if (!connected()) {
         const wl_status_t st = WiFi.status();
         const int reason = g_disconnectReason;
         radioOff();
