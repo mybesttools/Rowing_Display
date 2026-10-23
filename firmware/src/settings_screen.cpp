@@ -323,7 +323,7 @@ void onWifiDone(bool saved, const char* ssid, const char* password) {
 }
 
 void onSyncNow(lv_event_t*) {
-    net_time::startSync(g_edit.wifiSsid, g_edit.wifiPassword, timezones::zone(g_edit.timezone).posix);
+    net_time::requestSync(); // the main loop syncs, with the splash screen up
 }
 
 void onReset(lv_event_t*) {

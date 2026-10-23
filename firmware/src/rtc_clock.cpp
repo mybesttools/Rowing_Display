@@ -153,6 +153,11 @@ time_t lastSet() {
     return g_lastSet;
 }
 
+void forgetLastSet() {
+    g_lastSet = 0;
+    storeLastSet(0);
+}
+
 bool batteryProblem() {
     return g_batteryProblem;
 }

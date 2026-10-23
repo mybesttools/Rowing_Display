@@ -75,8 +75,33 @@ void applySettings(const settings::Settings& s) {
            settings::sensorName(s.sensor), s.background, s.paceBoatOn ? "on" : "off", s.paceBoatSplitSec);
 }
 
-void syncClock(const settings::Settings& s) {
+// Runs a Wi-Fi clock sync to the end with the splash screen up, showing its
+// progress. Blocking (a few seconds, up to ~40 s when the network is
+// unreachable): Wi-Fi and the RGB panel's PSRAM traffic disturb each other,
+// so nothing else should be drawing meanwhile. Never called mid-session.
+void syncClock(const settings::Settings& s, bool returnToScreen) {
+    if (s.wifiSsid[0] == '\0' || net_time::busy()) {
+        return;
+    }
+    panel_runtime::showSplash("Setting the clock...");
     net_time::startSync(s.wifiSsid, s.wifiPassword, timezones::zone(s.timezone).posix);
+    char shown[48] = "";
+    while (net_time::busy()) {
+        if (strcmp(shown, net_time::statusText()) != 0) {
+            snprintf(shown, sizeof(shown), "%s", net_time::statusText());
+            char line[64];
+            snprintf(line, sizeof(line), "Clock: %s", shown);
+            panel_runtime::setSplashStatus(line);
+        }
+        delay(50);
+    }
+    char line[64];
+    snprintf(line, sizeof(line), "Clock: %s", net_time::statusText());
+    panel_runtime::setSplashStatus(line);
+    delay(1200); // long enough to read the result
+    if (returnToScreen) {
+        panel_runtime::hideSplash();
+    }
 }
 
 // Weekly is plenty for an RTC (drifts seconds a week), and keeps the radio,
@@ -134,6 +159,7 @@ void endSession(uint32_t nowMs) {
 //   P                one sensor pulse, as if from the reed (scripts/sim_row.py)
 //   W                Wi-Fi scan (results in the log)
 //   Y                clock sync with the saved Wi-Fi settings
+//   F                forget the last clock sync, so the next boot syncs
 void pollSerialCommands(uint32_t nowMs) {
     static char line[24];
     static size_t len = 0;
@@ -152,7 +178,11 @@ void pollSerialCommands(uint32_t nowMs) {
             } else if (len == 1 && line[0] == 'W') {
                 net_time::startScan();
             } else if (len == 1 && line[0] == 'Y') {
-                syncClock(settings::current());
+                net_time::requestSync();
+            } else if (len == 1 && line[0] == 'F') {
+                rtc_clock::forgetLastSet();
+                panel_runtime::resyncDisplay(); // the NVS write stalled PSRAM
+                printf("clock: last sync forgotten, the next boot syncs\n");
             } else if (len == 1 && line[0] == 'P') {
                 const uint32_t ms = millis();
                 g_lastPulseMs = ms;
@@ -224,20 +254,24 @@ void setup() {
     applySettings(settings::current());
 
     g_ble.begin("RowingDisplay-ESP32");
-    panel_runtime::begin();
+    panel_runtime::begin(); // splash screen
     rtc_clock::begin();
     printf("heap: internal free %u (largest %u), psram free %u\n",
            static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_INTERNAL)),
            static_cast<unsigned>(heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL)),
            static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_SPIRAM)));
-    // Wi-Fi only for this, and off again once the clock is set (net_time.h).
+    // Wi-Fi only for this, and off again once the clock is set (net_time.h);
+    // done before the scene frames are rendered, so the two never overlap.
     if (clockSyncDue()) {
-        syncClock(settings::current());
+        syncClock(settings::current(), false);
     } else {
         printf("clock: last set %ld h ago, next sync in %ld h\n",
                static_cast<long>((time(nullptr) - rtc_clock::lastSet()) / 3600),
                static_cast<long>((rtc_clock::lastSet() + kClockSyncIntervalSec - time(nullptr)) / 3600));
     }
+
+    panel_runtime::setSplashStatus("Preparing the scene...");
+    panel_runtime::buildScreens();
 
     printf("Rowing display starter scaffold ready\n");
 }
@@ -255,7 +289,7 @@ void loop() {
         applied = submitted;
         applySettings(submitted);
         if (wifiChanged) {
-            syncClock(submitted);
+            syncClock(submitted, true);
         }
         if (strcmp(submitted.background, g_bootSettings.background) != 0) {
             // Backgrounds are read from the SD card and rendered into the
@@ -313,8 +347,11 @@ void loop() {
     if (nowMs - lastSyncCheckMs >= kClockSyncCheckMs) {
         lastSyncCheckMs = nowMs;
         if (!g_sessionActive && !net_time::busy() && clockSyncDue()) {
-            syncClock(settings::current());
+            syncClock(settings::current(), true);
         }
+    }
+    if (net_time::takeSyncRequest() && !g_sessionActive) {
+        syncClock(settings::current(), true);
     }
 
     if (pulse_log::poll(nowMs, sinceLastPulseMs >= 5000)) {

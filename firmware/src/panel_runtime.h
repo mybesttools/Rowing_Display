@@ -4,7 +4,21 @@
 
 namespace panel_runtime {
 
+// Starts the display with the splash screen up (see setSplashStatus()).
 bool begin();
+
+// Builds the home, session and settings screens, rendering the scene frames
+// (several seconds), then shows the home screen. Call once after begin(),
+// once anything that shouldn't overlap the frame rendering (the boot clock
+// sync) is done.
+void buildScreens();
+
+// Splash screen: the boot screen, and shown over whatever is up while the
+// Wi-Fi clock sync runs (Wi-Fi traffic disturbs the RGB panel, and a still,
+// dark screen hides it best). hideSplash() returns to the previous screen.
+void showSplash(const char* status);
+void setSplashStatus(const char* status);
+void hideSplash();
 void update(const RowerMetrics& metrics);
 
 // True exactly once, the loop iteration after the user pressed a "Start

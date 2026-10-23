@@ -23,6 +23,8 @@ void setTimezone(const char* posix);
 
 // When the clock was last set (UTC seconds, kept in NVS), 0 if never.
 time_t lastSet();
+// Forgets it, so the next boot syncs (serial "F", for testing).
+void forgetLastSet();
 
 // True when the RTC had been set before but came up with its "oscillator
 // stopped" flag: the board was fully powered off (no USB, LiPo switched

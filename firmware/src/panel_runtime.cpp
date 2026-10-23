@@ -32,6 +32,14 @@ void showSession() {}
 
 void setBanner(const char*) {}
 
+void buildScreens() {}
+
+void showSplash(const char*) {}
+
+void setSplashStatus(const char*) {}
+
+void hideSplash() {}
+
 void* ioExpanderBase() {
     return nullptr;
 }
@@ -80,6 +88,9 @@ constexpr int32_t kBottomBarH = 88;
 
 constexpr uint32_t kClipFrameMs = 90;
 
+lv_obj_t* g_splashScreen = nullptr;
+lv_obj_t* g_splashStatus = nullptr;
+lv_obj_t* g_screenBeforeSplash = nullptr;
 lv_obj_t* g_homeScreen = nullptr;
 lv_obj_t* g_homeSubtitle = nullptr;
 lv_obj_t* g_homeClock = nullptr;
@@ -390,6 +401,25 @@ lv_obj_t* makeMenuButton(lv_obj_t* parent, const char* text, lv_event_cb_t onCli
     return btn;
 }
 
+void buildSplashScreen() {
+    g_splashScreen = lv_obj_create(nullptr);
+    lv_obj_set_style_bg_color(g_splashScreen, kColorBg, 0);
+    lv_obj_set_flex_flow(g_splashScreen, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_flex_align(g_splashScreen, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_row(g_splashScreen, 24, 0);
+    lv_obj_clear_flag(g_splashScreen, LV_OBJ_FLAG_SCROLLABLE);
+
+    lv_obj_t* title = lv_label_create(g_splashScreen);
+    lv_label_set_text(title, "Let's get rowing!");
+    lv_obj_set_style_text_color(title, kColorAccent, 0);
+    lv_obj_set_style_text_font(title, &lv_font_montserrat_48, 0);
+
+    g_splashStatus = lv_label_create(g_splashScreen);
+    lv_obj_set_style_text_color(g_splashStatus, kColorHint, 0);
+    lv_obj_set_style_text_font(g_splashStatus, &lv_font_montserrat_24, 0);
+    lv_label_set_text(g_splashStatus, "Starting...");
+}
+
 void buildHomeScreen() {
     g_homeScreen = lv_obj_create(nullptr);
     lv_obj_set_style_bg_color(g_homeScreen, kColorBg, 0);
@@ -625,19 +655,62 @@ bool begin() {
     }
 
     esp_lv_adapter_lock(-1);
+    buildSplashScreen();
+    lv_screen_load(g_splashScreen);
+    esp_lv_adapter_unlock();
+    return true;
+}
+
+void buildScreens() {
+    if (g_display == nullptr) {
+        return;
+    }
+    esp_lv_adapter_lock(-1);
     buildHomeScreen();
     buildSessionScreen();
     g_settingsScreen = settings_screen::build(onSettingsDone);
     lv_screen_load(g_homeScreen);
     esp_lv_adapter_unlock();
-
     printf("panel: ready\n");
-    return true;
+}
+
+void showSplash(const char* status) {
+    if (g_splashScreen == nullptr || esp_lv_adapter_lock(-1) != ESP_OK) {
+        return;
+    }
+    lv_obj_t* active = lv_screen_active();
+    if (active != g_splashScreen) {
+        g_screenBeforeSplash = active;
+        stopScene(); // no frame blits (PSRAM traffic) behind the splash
+        lv_screen_load(g_splashScreen);
+    }
+    lv_label_set_text(g_splashStatus, status);
+    esp_lv_adapter_unlock();
+}
+
+void setSplashStatus(const char* status) {
+    if (g_splashStatus == nullptr || esp_lv_adapter_lock(-1) != ESP_OK) {
+        return;
+    }
+    lv_label_set_text(g_splashStatus, status);
+    esp_lv_adapter_unlock();
+}
+
+void hideSplash() {
+    if (g_screenBeforeSplash == nullptr || esp_lv_adapter_lock(-1) != ESP_OK) {
+        return;
+    }
+    if (g_screenBeforeSplash == g_sessionScreen) {
+        startScene();
+    }
+    lv_screen_load(g_screenBeforeSplash);
+    g_screenBeforeSplash = nullptr;
+    esp_lv_adapter_unlock();
 }
 
 void update(const RowerMetrics& metrics) {
-    if (g_display == nullptr) {
-        return;
+    if (g_display == nullptr || g_sessionScreen == nullptr) {
+        return; // screens not built yet (buildScreens())
     }
 
     // Sample rowing phase for animTimerCb() outside the LVGL lock. The 90ms

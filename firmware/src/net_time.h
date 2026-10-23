@@ -15,6 +15,11 @@ void startSync(const char* ssid, const char* password, const char* posixTz);
 // List nearby networks (strongest first, duplicates merged).
 void startScan();
 
+// From the UI (the SYNC button): ask the main loop to sync, which it does
+// with the splash screen up. True once per request.
+void requestSync();
+bool takeSyncRequest();
+
 State state();
 bool busy();
 // One line for the UI, e.g. "synced 10:02" or "wrong password?".

@@ -264,6 +264,18 @@ void startScan() {
     }
 }
 
+volatile bool g_syncRequested = false;
+
+void requestSync() {
+    g_syncRequested = true;
+}
+
+bool takeSyncRequest() {
+    const bool requested = g_syncRequested;
+    g_syncRequested = false;
+    return requested;
+}
+
 State state() {
     return g_state;
 }

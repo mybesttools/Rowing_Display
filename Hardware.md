@@ -3,8 +3,10 @@
 Living notes for the ESP32 console that replaces the stock monitor. Two
 machines are in scope: the **Dunlop Air Rower 750** (air fan) and the
 **Kuipers AquaRower** (water tank). The console in daily use is the 5"
-board on the Kuipers, reading that machine's stock reed switch. Build
-commands are in the root README; the source map is in `firmware/README.md`.
+board on the Kuipers, currently reading that machine's stock reed switch.
+The plan is a Hall sensor on both machines. The Kuipers mount is not
+settled; see "Hall sensor on the Kuipers". Build commands are in the root
+README; the source map is in `firmware/README.md`.
 
 ## Machine (stock)
 
@@ -49,14 +51,14 @@ Typical for this machine class (confirm on open-up):
 - One or more magnets on the flywheel / fan
 - Cable to the rear of the console
 
-**Decision for this machine:** replace the sensor and the monitor. The Kuipers install kept that machine's stock reed and replaced only the monitor (see Project goals).
+**Decision:** replace the sensor and the monitor on this machine with a Hall sensor and one magnet. The Kuipers gets the same sensor. That rower still has its stock reed fitted; the mount is the open question.
 
 ---
 
 ## Project goals
 
 1. Replace the stock console with an on-device color display. **Done** (Waveshare 5" and 7" boards).
-2. Read the flywheel sensor. **Done on the Kuipers with its stock reed** (one pulse per wheel turn, strokes detected from speed-up and slow-down). A Hall sensor is still the plan for a cleaner edge; it is not fitted.
+2. Read the flywheel with a **Hall sensor on both machines**, one magnet per turn, strokes detected from speed-up and slow-down. **The Kuipers currently runs on its stock reed** (one pulse per turn, calibrated). The Dunlop fan can take a bracket and a magnet. The Kuipers paddle-wheel mount is still to be checked on the machine.
 3. Derive split, power, distance, rate, and calories on the device. **Done.** The Kuipers preset is calibrated against its stock monitor. The Dunlop preset is not.
 4. Stream live metrics to phone apps over BLE FTMS, and accept Start / Stop / Pause / Reset. **Done.** There is no companion app; history is the TCX file on the SD card.
 5. A full session must work with no phone present. **Done.**
@@ -66,7 +68,7 @@ Typical for this machine class (confirm on open-up):
 ## Target architecture
 
 ```
-Flywheel reed or Hall → ESP32-S3 → 800×480 touch panel (primary UI)
+Flywheel Hall (Kuipers: stock reed until the mount is checked) → ESP32-S3 → 800×480 touch panel
                               ↓
                     BLE FTMS → phone app
                               ↓
@@ -77,7 +79,7 @@ Flywheel reed or Hall → ESP32-S3 → 800×480 touch panel (primary UI)
 
 | Layer | Role |
 |-------|------|
-| Reed (Kuipers today) or Hall | One pulse per wheel turn, or one pulse per stroke if Settings says so |
+| Hall, one magnet | One pulse per wheel turn. Kuipers still on its stock reed. Settings can still treat each pulse as a whole stroke |
 | ESP32-S3 | Timing, stroke and metrics math, display, BLE, session file |
 | 800×480 panel | Always-on primary readout |
 | FTMS | Live data and session control for existing fitness apps |
@@ -95,7 +97,7 @@ Flywheel reed or Hall → ESP32-S3 → 800×480 touch panel (primary UI)
 | Magnet | Small neodymium on fan blade or hub |
 | Pulses per rev | **Start with 1 magnet** |
 | Air gap | ~1–3 mm, mechanically fixed |
-| MCU input | GPIO + interrupt; `INPUT_PULLUP` if open-collector |
+| MCU input | 7" board: GPIO6, `INPUT_PULLUP`, active low. 5" board: open-drain into `DI1`. See below |
 | Debounce | Light software debounce if needed (Hall is cleaner than reed) |
 
 ### Why Hall (not reed)
@@ -103,6 +105,18 @@ Flywheel reed or Hall → ESP32-S3 → 800×480 touch panel (primary UI)
 - No contact bounce / wear
 - Cleaner edges for interrupt timing
 - Better long-term reliability under vibration
+
+### Hall sensor on the Kuipers
+
+The plan is the same part on both rowers. On the Dunlop the fan cage is open: a magnet on the fan, a Hall on the shroud, a 3-wire lead to the console. On the Kuipers the stock reed already sees one magnet once per paddle-wheel turn, and that is what the preset was calibrated against. Public photos of the AquaRower show the polycarbonate tank and not the sensor pocket, so three things have to be checked on the machine before buying a bracket:
+
+1. **The cable.** The reed lead is two wires, and the console end is a 2-pin pigtail into `DI1` and `GND`. A Hall needs a supply wire as well. Either a third conductor can be pulled up the mast, or the whole lead gets replaced.
+2. **The gap.** A glass reed fires across a wider gap than a small Hall switch. If the magnet is inside the tank and the reed sits outside a thick wall, a Hall in that same clip may never switch. Measure the gap, and see whether a bare sensor (a small transistor package, the size of the reed) fits the clip. A breakout board will not.
+3. **The pole and the water.** A unipolar Hall switches for one pole only. If the magnet is sealed into the wheel and cannot be turned over, the part has to be omnipolar. The pocket also has to stay dry. The reed is a sealed glass capsule; a Hall in the same place needs a seal the reed never did.
+
+The 5" input can take the Hall once those are settled. `DI1` is an opto: the reed's job is to connect `DI1` to `GND` and light the LED. An **open-drain** Hall output does that same connection (`OUT` to `DI1`, `GND` to `GND`). A push-pull output drives `DI1` high and can leave the LED half-lit, so it is the wrong kind. Power comes from the terminal's `VOUT` pin, which ships at 3.3 V (the I2C-header supply; a resistor on the board selects 5 V instead). A classic A3144 needs about 4.5 V, so it does not run from `VOUT` as the board sits. Use a 3.3 V open-drain part. The LED current is set by the 220 Ω and 3.6 kΩ resistors in series with it, and a small Hall switch can sink that.
+
+The 7" header is `3V3` / `GND` / GPIO6 with the pin pulled up, and the firmware counts an active-low edge. The same 3.3 V open-drain part works there. The Hall preset in Settings is a 2 ms debounce; pulse mode stays "wheel turns" and pulses per turn stays 1 until a logged session says otherwise. No firmware change is required for the experiment.
 
 ### Mounting notes (750 fan housing)
 
@@ -487,6 +501,18 @@ join ~3 s, IP 13 ms later, NTP ~0.4 s, radio off ~3.5 s after it started. DHCP f
 about half the attempts until `WiFi.setSleep(false)` (BLE shares the radio;
 the offer was missed in modem sleep): 6/6 syncs in 2–6 s after.
 
+**Splash screen and boot order:** Wi-Fi and the scene-frame rendering
+visibly disturbed the RGB panel when they ran together, so they never do.
+`panel_runtime::begin()` brings up only a splash screen; `main.cpp` then
+runs the clock sync to the end (if due) with its progress on the splash,
+and only then calls `panel_runtime::buildScreens()` (SD backgrounds, photo
+conversion, frame rendering, splash says "Preparing the scene..."). Later
+syncs (weekly check, SYNC, a new network) also block with the splash up
+and return to the previous screen; the scene animation is paused behind
+it. Never mid-session. Serial `F` forgets the last sync so the next boot
+syncs. Measured boot with a due sync: clock set ~7 s after power-on, then
+frames in ~7.2 s.
+
 **Schedule:** weekly. At boot only if the clock was last set ≥ 7 days ago
 (or isn't valid), and an hourly check while the display stays on, never
 during a session. Wi-Fi changes and SYNC sync at once. The last-set time is
@@ -621,8 +647,7 @@ Status:
 | Decision | Choice |
 |----------|--------|
 | Machines | Dunlop Air Rower 750 and Kuipers AquaRower, selectable in Settings. Daily use is the Kuipers |
-| Kuipers sensor | Stock reed, one pulse per wheel turn, strokes from flywheel speed. Hall replacement still open |
-| Dunlop sensor | Hall + one magnet is still the plan. That preset is uncalibrated |
+| Sensor | Hall on both machines, one magnet, 3.3 V open-drain. Kuipers still on its stock reed until the mount is checked on the machine. Dunlop preset uncalibrated |
 | Stock monitor | Replaced on both |
 | MCU and display | ESP32-S3, Waveshare 5" (daily) and 7", both 800×480 touch |
 | Phone required? | No. FTMS when a phone is present |
@@ -631,7 +656,7 @@ Status:
 
 ## Still open
 
-- Hall sensor in place of the Kuipers reed, and a part choice (push-pull vs open-drain) when that happens.
+- Kuipers Hall mount, on the machine: a third wire up the mast, the gap from the reed clip to the magnet, which pole faces the clip, and whether that pocket stays dry. The 5" `DI1` input accepts a 3.3 V open-drain Hall; a push-pull part and a classic A3144 (about 4.5 V minimum) do not match the board as it sits.
 - Dunlop inertia and boat constant, against a known distance.
 - Battery voltage. Both boards need a hardware modification before the firmware can read it.
 - A training app (Kinomap, EXR, or similar) against the FTMS service. The bleak check covered the packets and the control point. A saved TCX passes Garmin's schema; uploading one to Strava, Intervals.icu, or Garmin Connect is still to do.
@@ -781,3 +806,4 @@ These are the strongest reusable codebases found for this exact stack: ESP32 + r
 | 2026-08-13 | Replaced the placeholder rpm²-based metrics model with a flywheel-physics model (drag factor via recovery-phase regression, `P = k·ω³`, cube-root distance scaling), clean-room inspired by openrowingmonitor and ESPRowingMonitor (see "Reusable GitHub repositories" and "Metrics/physics model" above). Added ESPRowingMonitor to the repo shortlist. |
 | 2026-08-13 | Two machines confirmed in scope: the Dunlop Air Rower (flywheel, Germany) and a Kuipers AquaRower (water resistance, adjustable 12-21L tank, Amsterdam) — added a rower-profile split so firmware/calibration constants can target either. |
 | 2026-10-23 | Docs caught up with the firmware: RTC, scene, FTMS, TCX, pace boat, Wi-Fi clock, and the 5" reed path are implemented. The Dunlop preset and a Hall swap on the Kuipers are still open. |
+| 2026-10-23 | Sensor plan is a Hall on both machines. Kuipers feasibility is the mast cable, the magnet gap, the pole, and splash; the 5" input wants a 3.3 V open-drain part. |
