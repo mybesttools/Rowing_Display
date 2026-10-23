@@ -275,7 +275,10 @@ Stock and DIY air-rower meters are not Concept2-accurate by default.
 
 ### On-device settings (implemented)
 
-Home screen → **SETTINGS**. Picking a machine or sensor type loads its
+Home screen → **SETTINGS** opens a menu of six tiles, each showing its
+current value: Machine, Stroke detection, Sensor, Workout, Display, Clock &
+Wi-Fi. Each page fits without scrolling; BACK returns to the menu, SAVE
+saves everything, DEFAULTS shows on the machine/stroke/sensor pages only. Picking a machine or sensor type loads its
 factory defaults (`firmware/include/machine_presets.h`); each value can then
 be adjusted with −/+ (hold to repeat). Values that differ from the default
 show in the accent color, with the default under each row. **DEFAULTS**
@@ -428,6 +431,25 @@ over each frame in the present buffer. Its oars swing at 24 spm. It starts
 level when the session clock starts and drops out of view about 6 m
 behind. The label under the top bar reads "PACE 2:30 +12 m" (green: you're
 ahead; orange: behind).
+
+### Clock over Wi-Fi, time zone (implemented)
+
+Settings → Clock & Wi-Fi: a time zone (POSIX TZ strings with DST rules,
+`firmware/include/timezones.h`; settings store the index, append only) and
+a Wi-Fi network picked from a scan, password typed on an on-screen
+keyboard (`wifi_screen.cpp`). `net_time.cpp` runs each job on its own task
+and turns Wi-Fi off afterwards: at boot and after the network changes it
+connects, syncs NTP (`configTzTime`, not `configTime`, which overwrites
+TZ), writes the RTC and disconnects; SYNC does it on demand. The radio is
+off the rest of the time because RF and flash activity disturb the RGB
+panel; `resyncDisplay()` runs after each job (Wi-Fi start can write PHY
+calibration to NVS). Credentials live in our settings blob (NVS v5),
+`WiFi.persistent(false)`. RTC and system clock hold UTC (`rtc_clock` reads
+the RTC with its own date maths, since `mktime()` applies the zone); the
+zone only affects local time: the home screen clock and session file
+names. TCX times stay UTC. Wi-Fi adds ~550 KB flash (61.5%) and ~25 KB
+static RAM; ~71 KB internal heap free after boot. Serial `W` scans and
+logs the networks.
 
 ### On-device UI (implemented)
 

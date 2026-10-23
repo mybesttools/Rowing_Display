@@ -1,4 +1,6 @@
 #include <Arduino.h>
+
+#include "esp_heap_caps.h"
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -6,12 +8,14 @@
 #include "ble_ftms.h"
 #include "config.h"
 #include "metrics_model.h"
+#include "net_time.h"
 #include "panel_runtime.h"
 #include "pulse_log.h"
 #include "rtc_clock.h"
 #include "sensor_input.h"
 #include "session_log.h"
 #include "settings.h"
+#include "timezones.h"
 #include "waveshare_7_board.h"
 
 namespace {
@@ -57,6 +61,7 @@ void applySettings(const settings::Settings& s) {
     params.machine = s.machineParams;
     g_model.setParams(params);
     sensor_input::configure(s.expanderPin, s.sensorParams.debounceMs);
+    rtc_clock::setTimezone(timezones::zone(s.timezone).posix);
 
     const cfg::MachineParams& m = s.machineParams;
     pulse_log::printf(
@@ -68,6 +73,10 @@ void applySettings(const settings::Settings& s) {
     );
     printf("settings: %s, %s, background \"%s\", pace boat %s %u s\n", settings::machineName(s.machine),
            settings::sensorName(s.sensor), s.background, s.paceBoatOn ? "on" : "off", s.paceBoatSplitSec);
+}
+
+void syncClock(const settings::Settings& s) {
+    net_time::startSync(s.wifiSsid, s.wifiPassword, timezones::zone(s.timezone).posix);
 }
 
 void startSession(uint32_t nowMs) {
@@ -114,6 +123,7 @@ void endSession(uint32_t nowMs) {
 //   T<unix seconds>  set the clock (scripts/set_clock.py)
 //   S / E            start / end a session, like START SESSION and the X
 //   P                one sensor pulse, as if from the reed (scripts/sim_row.py)
+//   W                Wi-Fi scan (results in the log)
 void pollSerialCommands(uint32_t nowMs) {
     static char line[24];
     static size_t len = 0;
@@ -128,6 +138,8 @@ void pollSerialCommands(uint32_t nowMs) {
                 startSession(nowMs);
             } else if (len == 1 && line[0] == 'E') {
                 endSession(nowMs);
+            } else if (len == 1 && line[0] == 'W') {
+                net_time::startScan();
             } else if (len == 1 && line[0] == 'P') {
                 const uint32_t ms = millis();
                 g_lastPulseMs = ms;
@@ -201,6 +213,12 @@ void setup() {
     g_ble.begin("RowingDisplay-ESP32");
     panel_runtime::begin();
     rtc_clock::begin();
+    printf("heap: internal free %u (largest %u), psram free %u\n",
+           static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_INTERNAL)),
+           static_cast<unsigned>(heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL)),
+           static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_SPIRAM)));
+    // Wi-Fi only for this, and off again once the clock is set (net_time.h).
+    syncClock(settings::current());
 
     printf("Rowing display starter scaffold ready\n");
 }
@@ -212,7 +230,14 @@ void loop() {
     settings::Settings submitted;
     if (settings::takeSubmitted(submitted)) {
         panel_runtime::resyncDisplay(); // the NVS write stalled PSRAM
+        static settings::Settings applied = g_bootSettings;
+        const bool wifiChanged = strcmp(submitted.wifiSsid, applied.wifiSsid) != 0 ||
+                                 strcmp(submitted.wifiPassword, applied.wifiPassword) != 0;
+        applied = submitted;
         applySettings(submitted);
+        if (wifiChanged) {
+            syncClock(submitted);
+        }
         if (strcmp(submitted.background, g_bootSettings.background) != 0) {
             // Backgrounds are read from the SD card and rendered into the
             // scene frames at boot only (see panel_runtime.cpp).

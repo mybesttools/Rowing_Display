@@ -46,11 +46,12 @@ void formatUtc(char* out, size_t cap, time_t t) {
     strftime(out, cap, "%Y-%m-%dT%H:%M:%SZ", &parts);
 }
 
-// "2026-10-23_0945.tcx", or "session-NNN.tcx" while the clock isn't set.
+// "2026-10-23_094512.tcx" in local time, or "session-NNN.tcx" while the
+// clock isn't set. The times inside the file are UTC.
 void pickFileName(char* out, size_t cap) {
     if (rtc_clock::valid()) {
         tm parts{};
-        gmtime_r(&g_startUtc, &parts);
+        localtime_r(&g_startUtc, &parts);
         strftime(out, cap, "%Y-%m-%d_%H%M%S.tcx", &parts);
         return;
     }

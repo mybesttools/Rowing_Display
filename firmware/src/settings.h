@@ -20,8 +20,12 @@ struct Settings {
     // Pace boat target split, seconds per 500 m (kept while it's off).
     uint16_t paceBoatSplitSec;
     bool paceBoatOn;
+    // Wi-Fi network for the clock sync (net_time.h); "" = none.
+    char wifiSsid[33];
+    char wifiPassword[65];
+    uint8_t timezone; // timezones::kZones index
 };
-static_assert(sizeof(Settings) == 76, "NVS blob layout; bump kVersion and migrate when this changes");
+static_assert(sizeof(Settings) == 172, "NVS blob layout; bump kVersion and migrate when this changes");
 
 constexpr uint16_t kDefaultPaceBoatSplitSec = 150;
 

@@ -2,6 +2,8 @@
 
 #include <sys/time.h>
 
+#include <cstdlib>
+
 #include <cstdint>
 #include <cstdio>
 
@@ -27,6 +29,17 @@ constexpr uint8_t kAddress = 0x51;
 constexpr uint8_t kRegSeconds = 0x04;
 constexpr i2c_port_t kPort = I2C_NUM_0;
 
+// Civil date to days since 1970-01-01 (Howard Hinnant's days_from_civil).
+// mktime() would apply the time zone; the RTC holds UTC.
+int64_t daysFromCivil(int y, unsigned m, unsigned d) {
+    y -= m <= 2;
+    const int era = (y >= 0 ? y : y - 399) / 400;
+    const unsigned yoe = static_cast<unsigned>(y - era * 400);
+    const unsigned doy = (153 * (m + (m > 2 ? -3 : 9)) + 2) / 5 + d - 1;
+    const unsigned doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    return static_cast<int64_t>(era) * 146097 + static_cast<int64_t>(doe) - 719468;
+}
+
 uint8_t fromBcd(uint8_t v) {
     return static_cast<uint8_t>((v >> 4) * 10 + (v & 0x0F));
 }
@@ -51,15 +64,9 @@ bool readRtc(time_t& out) {
         printf("clock: RTC not set (oscillator stopped)\n");
         return false;
     }
-    tm t{};
-    t.tm_sec = fromBcd(r[0] & 0x7F);
-    t.tm_min = fromBcd(r[1] & 0x7F);
-    t.tm_hour = fromBcd(r[2] & 0x3F);
-    t.tm_mday = fromBcd(r[3] & 0x3F);
-    t.tm_mon = fromBcd(r[5] & 0x1F) - 1;
-    t.tm_year = 100 + fromBcd(r[6]);
-    // mktime() works in local time; the system has no TZ set, so it's UTC.
-    out = mktime(&t);
+    const int64_t days = daysFromCivil(2000 + fromBcd(r[6]), fromBcd(r[5] & 0x1F), fromBcd(r[3] & 0x3F));
+    out = static_cast<time_t>(days * 86400 + fromBcd(r[2] & 0x3F) * 3600 + fromBcd(r[1] & 0x7F) * 60 +
+                              fromBcd(r[0] & 0x7F));
     return true;
 }
 
@@ -91,10 +98,10 @@ void setSystem(time_t utc) {
 void printNow(const char* what) {
     const time_t now = time(nullptr);
     tm t{};
-    gmtime_r(&now, &t);
-    char buf[32];
-    strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M:%S", &t);
-    printf("clock: %s %s UTC\n", what, buf);
+    localtime_r(&now, &t);
+    char buf[40];
+    strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M:%S %Z", &t);
+    printf("clock: %s %s\n", what, buf);
 }
 
 } // namespace
@@ -107,6 +114,11 @@ void begin() {
         printNow("from RTC");
     }
 #endif
+}
+
+void setTimezone(const char* posix) {
+    setenv("TZ", posix, 1);
+    tzset();
 }
 
 bool valid() {

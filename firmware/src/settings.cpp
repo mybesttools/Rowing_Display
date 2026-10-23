@@ -16,8 +16,9 @@ constexpr char kKey[] = "settings";
 // Bump when Settings' layout changes; a mismatched blob falls back to defaults.
 // 2: + background. 3: + paceBoatSplitSec (0 = off), in former padding.
 // 4: + paceBoatOn, appended: versions 2 and 3 are this layout's first 76
-// bytes and load as a prefix.
-constexpr uint8_t kVersion = 4;
+// bytes and load as a prefix. 5: + Wi-Fi and time zone, appended the same
+// way after version 4's 80 bytes.
+constexpr uint8_t kVersion = 5;
 
 struct Stored {
     uint8_t version;
@@ -25,6 +26,8 @@ struct Stored {
 };
 constexpr size_t kStoredV2V3Size = 76;
 static_assert(offsetof(Stored, s) + offsetof(Settings, paceBoatOn) == kStoredV2V3Size, "v2/v3 end where paceBoatOn starts");
+constexpr size_t kStoredV4Size = 80;
+static_assert(offsetof(Stored, s) + offsetof(Settings, wifiSsid) <= kStoredV4Size, "v4 ends before wifiSsid");
 
 // Version 1: Settings before `background` was added. Still loaded, so an
 // update keeps the user's calibration.
@@ -75,6 +78,9 @@ Settings defaults(cfg::MachineType machine, cfg::SensorType sensor) {
         "",
         kDefaultPaceBoatSplitSec,
         false,
+        "",
+        "",
+        0,
     };
 }
 
@@ -90,6 +96,9 @@ void begin() {
     StoredV1 v1{};
     if (len == sizeof(stored) && prefs.getBytes(kKey, &stored, sizeof(stored)) == len && stored.version == kVersion) {
         g_current = stored.s;
+    } else if (len == kStoredV4Size && prefs.getBytes(kKey, &stored, len) == len && stored.version == 4) {
+        // The bytes past version 4's end are still zero: no Wi-Fi, UTC.
+        g_current = stored.s;
     } else if (len == kStoredV2V3Size && prefs.getBytes(kKey, &stored, len) == len &&
                (stored.version == 2 || stored.version == 3)) {
         const uint16_t split = stored.version == 3 ? stored.s.paceBoatSplitSec : 0;
@@ -104,6 +113,8 @@ void begin() {
         g_current.sensorParams = v1.sensorParams;
     }
     g_current.background[sizeof(g_current.background) - 1] = '\0';
+    g_current.wifiSsid[sizeof(g_current.wifiSsid) - 1] = '\0';
+    g_current.wifiPassword[sizeof(g_current.wifiPassword) - 1] = '\0';
     prefs.end();
 }
 

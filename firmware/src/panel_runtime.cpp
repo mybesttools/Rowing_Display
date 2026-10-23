@@ -47,6 +47,7 @@ void resyncDisplay() {}
 #include "esp_lcd_panel_rgb.h"
 #include "esp_lv_adapter_arduino.h"
 #include "pace_boat.h"
+#include "rtc_clock.h"
 #include "rower_scene.h"
 #include "sd_backgrounds.h"
 #include "settings.h"
@@ -81,6 +82,7 @@ constexpr uint32_t kClipFrameMs = 90;
 
 lv_obj_t* g_homeScreen = nullptr;
 lv_obj_t* g_homeSubtitle = nullptr;
+lv_obj_t* g_homeClock = nullptr;
 lv_obj_t* g_settingsScreen = nullptr;
 lv_obj_t* g_sessionScreen = nullptr;
 lv_obj_t* g_bgImg = nullptr;
@@ -408,6 +410,13 @@ void buildHomeScreen() {
 
     makeMenuButton(g_homeScreen, "START SESSION", onStartClicked);
     makeMenuButton(g_homeScreen, "SETTINGS", onSettingsClicked);
+
+    g_homeClock = lv_label_create(g_homeScreen);
+    lv_obj_add_flag(g_homeClock, LV_OBJ_FLAG_IGNORE_LAYOUT);
+    lv_obj_set_style_text_color(g_homeClock, kColorHint, 0);
+    lv_obj_set_style_text_font(g_homeClock, &lv_font_montserrat_24, 0);
+    lv_obj_align(g_homeClock, LV_ALIGN_TOP_RIGHT, -16, 12);
+    lv_label_set_text(g_homeClock, "");
 }
 
 void buildSessionScreen() {
@@ -696,6 +705,20 @@ void update(const RowerMetrics& metrics) {
 
     snprintf(buf, sizeof(buf), "%lu", static_cast<unsigned long>(metrics.strokeCount));
     lv_label_set_text(g_strokesLabel, buf);
+
+    // Home screen clock, once a minute.
+    static int shownMinute = -1;
+    if (rtc_clock::valid()) {
+        const time_t now = time(nullptr);
+        tm local{};
+        localtime_r(&now, &local);
+        if (local.tm_min != shownMinute) {
+            shownMinute = local.tm_min;
+            char clock[32];
+            strftime(clock, sizeof(clock), "%a %d %b  %H:%M", &local);
+            lv_label_set_text(g_homeClock, clock);
+        }
+    }
 
     snprintf(buf, sizeof(buf), "%.0f", metrics.energyKcal);
     lv_label_set_text(g_kcalLabel, buf);
