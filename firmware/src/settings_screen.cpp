@@ -18,7 +18,7 @@ using settings::Settings;
 
 // A numeric setting edited with -/+ buttons. Floats step by a percentage of
 // their value (inertia ranges 0.1 to 1.9 between machines), ints by a fixed
-// amount. Splits are whole seconds shown as m:ss, with 0 meaning off.
+// amount. Splits are whole seconds shown as m:ss.
 struct NumField {
     const char* name;
     const char* hint;
@@ -31,9 +31,6 @@ struct NumField {
     bool isSplit = false;
 };
 
-// Pace boat: from off, + jumps to this; below kMinSplitSec, - turns it off.
-constexpr float kFirstSplitSec = 150.0f;
-constexpr float kMinSplitSec = 60.0f;
 
 const NumField kMachineFields[] = {
     {"Pulses per wheel turn", "magnets passing the sensor per turn",
@@ -66,9 +63,9 @@ const NumField kSensorFields[] = {
 };
 
 const NumField kWorkoutFields[] = {
-    {"Pace boat", "target split /500m; it rows beside you, off = none",
+    {"Target split", "/500m the pace boat rows; hold to change faster",
      [](const Settings& s) { return float(s.paceBoatSplitSec); },
-     [](Settings& s, float v) { s.paceBoatSplitSec = uint16_t(v); }, false, 1, 0, 599, true},
+     [](Settings& s, float v) { s.paceBoatSplitSec = uint16_t(v); }, false, 5, 60, 595, true},
 };
 
 constexpr int kMachineFieldCount = sizeof(kMachineFields) / sizeof(kMachineFields[0]);
@@ -94,15 +91,12 @@ lv_obj_t* g_ddSensor = nullptr;
 lv_obj_t* g_ddMode = nullptr;
 lv_obj_t* g_ddInput = nullptr;
 lv_obj_t* g_ddBackground = nullptr;
+lv_obj_t* g_swPaceBoat = nullptr;
 
 void formatValue(char* out, size_t cap, const NumField& f, float v) {
     if (f.isSplit) {
         const int sec = static_cast<int>(lroundf(v));
-        if (sec == 0) {
-            snprintf(out, cap, "off");
-        } else {
-            snprintf(out, cap, "%d:%02d", sec / 60, sec % 60);
-        }
+        snprintf(out, cap, "%d:%02d", sec / 60, sec % 60);
     } else if (f.isFloat) {
         snprintf(out, cap, "%.3g", v);
     } else {
@@ -154,6 +148,11 @@ void refresh() {
     lv_dropdown_set_selected(g_ddSensor, static_cast<uint32_t>(g_edit.sensor));
     lv_dropdown_set_selected(g_ddMode, static_cast<uint32_t>(g_edit.pulseMode));
     lv_dropdown_set_selected(g_ddBackground, backgroundIndex(g_edit.background));
+    if (g_edit.paceBoatOn) {
+        lv_obj_add_state(g_swPaceBoat, LV_STATE_CHECKED);
+    } else {
+        lv_obj_clear_state(g_swPaceBoat, LV_STATE_CHECKED);
+    }
 #if defined(ROWING_BOARD_LCD_5)
     lv_dropdown_set_selected(g_ddInput, g_edit.expanderPin == cfg::DI0_EXPANDER_PIN ? 0 : 1);
 #endif
@@ -169,13 +168,8 @@ void onStep(lv_event_t* e) {
         char buf[16];
         snprintf(buf, sizeof(buf), "%.3g", v);
         v = strtof(buf, nullptr);
-    } else if (f.isSplit && v == 0.0f) {
-        v = up ? kFirstSplitSec : 0.0f;
     } else {
         v += up ? f.step : -f.step;
-        if (f.isSplit && v < kMinSplitSec) {
-            v = 0.0f;
-        }
     }
     if (v < f.min) {
         v = f.min;
@@ -217,11 +211,16 @@ void onDropdown(lv_event_t* e) {
     refresh();
 }
 
+void onPaceBoatSwitch(lv_event_t* e) {
+    g_edit.paceBoatOn = lv_obj_has_state(static_cast<lv_obj_t*>(lv_event_get_target(e)), LV_STATE_CHECKED);
+}
+
 void onReset(lv_event_t*) {
     // Machine/sensor defaults only; background and pace boat are kept.
     Settings reset = settings::defaults(g_edit.machine, g_edit.sensor);
     memcpy(reset.background, g_edit.background, sizeof(reset.background));
     reset.paceBoatSplitSec = g_edit.paceBoatSplitSec;
+    reset.paceBoatOn = g_edit.paceBoatOn;
     g_edit = reset;
     refresh();
 }
@@ -398,6 +397,13 @@ lv_obj_t* build(DoneCallback onDone) {
     }
 
     makeSection(list, "WORKOUT");
+    lv_obj_t* paceRow = makeRow(list);
+    makeRowText(paceRow, "Pace boat", "a ghost boat rows the target split beside you");
+    g_swPaceBoat = lv_switch_create(paceRow);
+    lv_obj_set_size(g_swPaceBoat, 96, 48);
+    lv_obj_set_style_bg_color(g_swPaceBoat, kColorBg, LV_PART_MAIN);
+    lv_obj_set_style_bg_color(g_swPaceBoat, kColorAccent, LV_PART_INDICATOR | LV_STATE_CHECKED);
+    lv_obj_add_event_cb(g_swPaceBoat, onPaceBoatSwitch, LV_EVENT_VALUE_CHANGED, nullptr);
     for (int i = kWorkoutFieldStart; i < kFieldCount; i++) {
         makeNumberRow(list, i);
     }

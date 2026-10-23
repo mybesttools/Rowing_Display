@@ -17,11 +17,13 @@ struct Settings {
     cfg::SensorParams sensorParams;
     // Scene background file on the SD card (sd_backgrounds.h); "" = built-in.
     char background[32];
-    // Pace boat target split in seconds per 500 m; 0 = no pace boat. Sits in
-    // what was tail padding in the version-2 blob (same size).
+    // Pace boat target split, seconds per 500 m (kept while it's off).
     uint16_t paceBoatSplitSec;
+    bool paceBoatOn;
 };
-static_assert(sizeof(Settings) == 72, "NVS blob layout; bump kVersion and migrate when this changes");
+static_assert(sizeof(Settings) == 76, "NVS blob layout; bump kVersion and migrate when this changes");
+
+constexpr uint16_t kDefaultPaceBoatSplitSec = 150;
 
 // Factory defaults for a machine + sensor combination.
 Settings defaults(cfg::MachineType machine, cfg::SensorType sensor);

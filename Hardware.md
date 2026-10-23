@@ -417,9 +417,10 @@ them, for testing at a desk.
 
 ### Pace boat (implemented)
 
-Settings → WORKOUT → Pace boat: a target split (off by default; + from off
-starts at 2:30, - below 1:00 turns it off). During a session a translucent
-single sculler (`pace_boat.cpp`) rows that split in the lane 4.5 m to the
+Settings → WORKOUT: a Pace boat on/off switch and its Target split (default
+2:30, 5 s per tap, hold to repeat; kept while the boat is off). NVS v4
+appends `paceBoatOn`; v2/v3 blobs load as a prefix. During a session a translucent
+single sculler (`pace_boat.cpp`) rows that split in the lane 3 m to the
 right, positioned with the scene camera (`rower_scene::project()`) and drawn
 over each frame in the present buffer. Its oars swing at 24 spm. It starts
 level when the session clock starts and drops out of view about 2.5 m

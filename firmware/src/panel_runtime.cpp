@@ -649,7 +649,8 @@ void update(const RowerMetrics& metrics) {
     // between whole seconds so it glides instead of jumping once a second.
     static uint32_t lastElapsedSec = UINT32_MAX;
     static uint32_t elapsedChangedMs = 0;
-    const uint16_t paceSplitSec = settings::current().paceBoatSplitSec;
+    const settings::Settings s = settings::current();
+    const uint16_t paceSplitSec = s.paceBoatOn ? s.paceBoatSplitSec : 0;
     float paceDelta = 0.0f; // metres we're ahead of the pace boat
     if (paceSplitSec > 0) {
         const uint32_t now = millis();

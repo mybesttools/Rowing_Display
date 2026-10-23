@@ -66,8 +66,8 @@ void applySettings(const settings::Settings& s) {
         static_cast<int>(s.pulseMode), s.expanderPin, m.pulsesPerRev, m.flywheelInertia, m.initialDragFactor,
         m.boatConstant, m.minDriveMs, m.minRecoveryMs, m.minPulseGapMs, s.sensorParams.debounceMs
     );
-    printf("settings: %s, %s, background \"%s\", pace boat %u s\n", settings::machineName(s.machine),
-           settings::sensorName(s.sensor), s.background, s.paceBoatSplitSec);
+    printf("settings: %s, %s, background \"%s\", pace boat %s %u s\n", settings::machineName(s.machine),
+           settings::sensorName(s.sensor), s.background, s.paceBoatOn ? "on" : "off", s.paceBoatSplitSec);
 }
 
 void startSession(uint32_t nowMs) {

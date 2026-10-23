@@ -12,8 +12,11 @@ namespace {
 
 // Present buffer pixels per scene frame pixel (panel_runtime's 2x blit).
 constexpr float kScale = 2.0f;
-// Lane offset: clear of our own oar blades (about 2.4 m out).
-constexpr float kLaneX = 4.5f;
+// Lane offset. Beside our boat but inside the picture: at 4.5 m (fully
+// clear of our blades) it sat past the right edge until it was ~3 m ahead.
+// At 3 m its left blade can cross our right one when level; it's
+// translucent, so that reads as two boats close together.
+constexpr float kLaneX = 3.0f;
 constexpr float kAlpha = 0.6f;
 
 struct Canvas {
