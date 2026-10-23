@@ -114,6 +114,14 @@ void BleFtmsService::begin(const String& deviceName) {
     const uint8_t serviceData[] = {0x01, 0x10, 0x00};
     advertising->setServiceData(NimBLEUUID(FTMS_SERVICE_UUID), serviceData, sizeof(serviceData));
 
+    // The advertisement is full (flags, service UUID, service data), so the
+    // name goes in the scan response; without it apps list the rower as
+    // unnamed.
+    NimBLEAdvertisementData scanResponse;
+    scanResponse.setName(deviceName.c_str());
+    advertising->setScanResponseData(scanResponse);
+    advertising->enableScanResponse(true);
+
     advertising->start();
 
     ready_ = true;
@@ -130,8 +138,9 @@ void BleFtmsService::notify(const RowerMetrics& metrics) {
         if (size == 0) {
             return;
         }
-        g_rowerChar->setValue(payload, size);
-        g_rowerChar->notify();
+        // Sends this buffer directly: setValue() + notify() twice in a row
+        // occasionally delivered a packet with a corrupted first byte.
+        g_rowerChar->notify(payload, size);
     }
 }
 
@@ -152,6 +161,5 @@ void BleFtmsService::notifyStatus(ftms::status::Event event, uint8_t parameter) 
     if (size == 0) {
         return;
     }
-    g_statusChar->setValue(payload, size);
-    g_statusChar->notify();
+    g_statusChar->notify(payload, size);
 }

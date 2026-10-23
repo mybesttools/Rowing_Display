@@ -379,7 +379,12 @@ saves, below) or 2 pauses, Reset zeroes the session. A StopOrPause without
 a parameter is answered InvalidParameter. Every change, from the app or the
 display, is reported on Fitness Machine Status (0x2ADA): 0x01 reset, 0x02
 stopped/paused + parameter, 0x04 started/resumed. RequestControl isn't
-enforced (compatibility over spec purity, as before).
+enforced (compatibility over spec purity, as before). The device name goes in the scan
+response (the advertisement is full); before that, scanners saw an unnamed
+FTMS device. Verified 2026-10-23 from a Mac with a bleak client acting as an
+app: all control point commands answered and acted on, status
+notifications sent, 468/468 data packets well-formed during a simulated
+25-stroke session.
 
 ### Session files on the SD card (implemented)
 
