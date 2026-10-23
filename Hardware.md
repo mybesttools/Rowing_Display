@@ -420,10 +420,12 @@ them, for testing at a desk.
 Settings → WORKOUT: a Pace boat on/off switch and its Target split (default
 2:30, 5 s per tap, hold to repeat; kept while the boat is off). NVS v4
 appends `paceBoatOn`; v2/v3 blobs load as a prefix. During a session a translucent
-single sculler (`pace_boat.cpp`) rows that split in the lane 3 m to the
-right, positioned with the scene camera (`rower_scene::project()`) and drawn
+single sculler (`pace_boat.cpp`) rows that split in a lane 2.5 m to the
+right, drawn 6 m further ahead than it really is (a boat truly level with
+ours is outside the camera's view: tried 4.5 m and 3 m lanes, only oar tips
+showed), so level = just past our bow, positioned with the scene camera (`rower_scene::project()`) and drawn
 over each frame in the present buffer. Its oars swing at 24 spm. It starts
-level when the session clock starts and drops out of view about 2.5 m
+level when the session clock starts and drops out of view about 6 m
 behind. The label under the top bar reads "PACE 2:30 +12 m" (green: you're
 ahead; orange: behind).
 

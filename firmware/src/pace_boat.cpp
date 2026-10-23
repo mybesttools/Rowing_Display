@@ -12,11 +12,14 @@ namespace {
 
 // Present buffer pixels per scene frame pixel (panel_runtime's 2x blit).
 constexpr float kScale = 2.0f;
-// Lane offset. Beside our boat but inside the picture: at 4.5 m (fully
-// clear of our blades) it sat past the right edge until it was ~3 m ahead.
-// At 3 m its left blade can cross our right one when level; it's
-// translucent, so that reads as two boats close together.
-constexpr float kLaneX = 3.0f;
+// The camera sits behind our stern with a narrow view, so a boat really
+// level with ours is out of frame (tried: at 4.5 m and 3 m only its oar
+// tips showed). It's drawn kViewAheadM further ahead than it is, in a lane
+// clear of our oars there: level = just past our bow, on the right. It
+// leaves the picture once it's ~kViewAheadM behind; the label has the
+// real gap.
+constexpr float kLaneX = 2.5f;
+constexpr float kViewAheadM = 6.0f;
 constexpr float kAlpha = 0.6f;
 
 struct Canvas {
@@ -134,7 +137,7 @@ void draw(lv_draw_buf_t* frame, float gapMeters, float strokePhase) {
     }
     const Canvas c{reinterpret_cast<uint16_t*>(frame->data), static_cast<int>(frame->header.w),
                    static_cast<int>(frame->header.h), static_cast<int>(frame->header.stride / sizeof(uint16_t))};
-    const float seatZ = gapMeters + rower_scene::kRowerZ;
+    const float seatZ = gapMeters + kViewAheadM + rower_scene::kRowerZ;
     P2 seat;
     float ppm = 0.0f;
     if (!at(kLaneX, 0.0f, seatZ, seat, &ppm)) {
