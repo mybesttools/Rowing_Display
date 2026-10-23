@@ -35,7 +35,7 @@ The case is 3D-printed: a case frame, a backplate with standoffs for the board, 
 | M5 nut | 4 | For the M5 screws |
 | M2.5 × 8 mm screw | 4 | Case assembly |
 | USB-C cable | 1 | Flashing and charging |
-| CR927 coin cell (optional) | 1 | Fits the board's RTC holder; keeps the clock running while the board is fully off |
+| CR927 coin cell (3 V lithium, plain button, no solder tabs) | 1 | Clock battery: goes in the board's `RTC` holder and keeps the clock running while the board is fully off |
 | microSD card, FAT32 (optional) | 1 | Extra scene backgrounds and saved session files (TCX) |
 
 ![The 2-pin pigtail used to connect the reed switch](building-a-rowing-display-images/reed-connector-cable.png)
