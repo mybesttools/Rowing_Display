@@ -7,6 +7,7 @@
 
 #include "ble_ftms.h"
 #include "config.h"
+#include "firmware_version.h"
 #include "metrics_model.h"
 #include "net_time.h"
 #include "panel_runtime.h"
@@ -243,6 +244,7 @@ void setup() {
     // secondary console directly and are what actually reach the USB port, so
     // that's what all logging below uses instead of Serial.print*.
     Serial.begin(cfg::SERIAL_BAUD);
+    printf("Rowing display firmware %s\n", kFirmwareVersion);
 
     waveshare7::logBoardProfile();
 
@@ -274,7 +276,7 @@ void setup() {
     panel_runtime::setSplashStatus("Preparing the scene...");
     panel_runtime::buildScreens();
 
-    printf("Rowing display starter scaffold ready\n");
+    printf("ready\n");
 }
 
 void loop() {

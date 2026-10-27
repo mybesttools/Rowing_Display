@@ -13,3 +13,6 @@ compile_commands.json
 sd_card/
 background_previews/
 __pycache__/
+
+# Generated at build time (scripts/firmware_version.py)
+firmware/src/firmware_version.cpp

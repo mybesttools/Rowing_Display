@@ -77,6 +77,21 @@ Each session is saved to the SD card as `/sessions/<date>_<time>.tcx` when
 it ends; upload it to Strava, Intervals.icu or Garmin Connect and set the
 activity type to rowing.
 
+## Versioning
+
+Releases follow [semantic versioning](https://semver.org/). The number is in
+[`VERSION`](VERSION); [`CHANGELOG.md`](CHANGELOG.md) lists what changed.
+
+Each build is stamped by `scripts/firmware_version.py`. A build of the commit
+tagged `v<VERSION>` with no local changes reports just the number, e.g.
+`1.0.0`. Any other build adds the commit and `.dirty` for uncommitted changes,
+e.g. `1.0.0+f920599.dirty`. The version shows in the bottom-right corner of
+the splash and home screens, in the boot log, and to Bluetooth apps as the
+Device Information firmware revision.
+
+To release: set `VERSION`, move the `Unreleased` notes in `CHANGELOG.md`
+under the new number, commit, then `git tag v<VERSION>` and push the tag.
+
 ## Backgrounds
 
 The scene behind the rower is a photo. The easiest way to add your own: put
