@@ -63,7 +63,7 @@ pio run -e esp32-s3-lcd5-kuipers        # 5" board, first boot on the Kuipers pr
 pio run -e <env> -t upload              # flash
 pio test -e native-test                 # run the metrics-model unit tests
 
-# pull the on-device pulse log after a session
+# pull the on-device pulse logs (the newest 7 boots that saw rowing)
 ~/.platformio/penv/bin/python scripts/fetch_pulse_log.py --port /dev/cu.usbmodemXXXX
 
 # set the clock used for session files (once on the 5" board: it has an RTC)

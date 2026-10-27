@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """Pull the on-device pulse log (firmware/src/pulse_log.cpp) off the board.
 
-Reads the "spiffs" partition with esptool, saves the text log under logs/,
-and prints a per-boot summary. --clear wipes the log afterwards (the
-firmware reformats the partition on its next boot).
+Reads the "spiffs" partition with esptool, puts the logs back together from
+its 4 KB sectors (the firmware keeps the newest 7, one per boot that saw
+rowing), saves them oldest first under logs/ and prints a per-boot summary.
+--clear wipes the partition afterwards.
 
     ~/.platformio/penv/bin/python scripts/fetch_pulse_log.py --port /dev/cu.usbmodem21201 [--clear]
 
@@ -20,13 +21,16 @@ Line format:
 import argparse
 import datetime
 import pathlib
+import struct
 import subprocess
 import sys
+import time
 
 PART_OFFSET = 0x670000
 PART_SIZE = 0x180000
 CHUNK = 0x10000
-HEADER = b"ROWLOG1\n"
+SECTOR = 0x1000
+MAGIC = b"RLG2"
 ESPTOOL = pathlib.Path.home() / ".platformio/packages/tool-esptoolpy/esptool.py"
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 
@@ -84,23 +88,34 @@ def main():
     stamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
     raw_path = out_dir / f"pulse_log_{stamp}.bin"
 
-    # Read in chunks and stop at the first erased byte; a full-partition read
-    # takes minutes over USB.
+    # The logs can sit anywhere in the ring, so the whole partition is read,
+    # in chunks: one long read over USB can drop out part way.
     raw = b""
     while len(raw) < PART_SIZE:
-        n = min(CHUNK, PART_SIZE - len(raw))
-        esptool(args.port, "--after", "no_reset", "read_flash", hex(PART_OFFSET + len(raw)), hex(n), str(raw_path))
-        chunk = raw_path.read_bytes()
-        raw += chunk
-        if b"\xff" in chunk:
-            break
+        for attempt in range(3):
+            try:
+                esptool(args.port, "--after", "no_reset", "read_flash", hex(PART_OFFSET + len(raw)), hex(CHUNK),
+                        str(raw_path))
+                break
+            except subprocess.CalledProcessError:
+                if attempt == 2:
+                    raise
+                time.sleep(2)
+        raw += raw_path.read_bytes()
     raw_path.unlink()
     esptool(args.port, "--before", "no_reset", "run")
-    if not raw.startswith(HEADER):
-        sys.exit("No log found (partition not formatted yet).")
-    body = raw[len(HEADER):]
-    end = body.find(b"\xff")
-    text = body[: end if end >= 0 else len(body)].decode(errors="replace")
+
+    sectors = []
+    for off in range(0, len(raw), SECTOR):
+        if raw[off : off + 4] == MAGIC:
+            seq, index = struct.unpack_from("<II", raw, off + 4)
+            sectors.append((seq, index, raw[off + 12 : off + SECTOR].rstrip(b"\xff")))
+    if not sectors:
+        sys.exit("No log found.")
+    sectors.sort()
+    seqs = sorted({s[0] for s in sectors})
+    print(f"{len(seqs)} log(s) on the device: #{seqs[0]} to #{seqs[-1]}")
+    text = b"".join(s[2] for s in sectors).decode(errors="replace")
 
     txt_path = out_dir / f"pulse_log_{stamp}.csv"
     txt_path.write_text(text)
@@ -108,9 +123,7 @@ def main():
     summarize(text)
 
     if args.clear:
-        # Invalidating the header is enough: the firmware erases the whole
-        # partition on its next boot when the header is missing.
-        esptool(args.port, "erase_region", hex(PART_OFFSET), "0x1000")
+        esptool(args.port, "erase_region", hex(PART_OFFSET), hex(PART_SIZE))
         print("Log cleared.")
 
 

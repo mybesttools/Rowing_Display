@@ -189,6 +189,7 @@ void pollSerialCommands(uint32_t nowMs) {
                 const uint32_t ms = millis();
                 g_lastPulseMs = ms;
                 g_model.onPulseMicros(micros(), ms);
+                pulse_log::printf("P,%lu\n", static_cast<unsigned long>(ms));
             }
             len = 0;
         } else if (len + 1 < sizeof(line)) {

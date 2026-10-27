@@ -4,7 +4,8 @@
 
 // Append-only text log in the unused "spiffs" flash partition, so a rowing
 // session can be pulled off later with scripts/fetch_pulse_log.py (esptool
-// read_flash). Survives resets and power-off.
+// read_flash). Survives resets and power-off. One log per boot that saw
+// rowing; the oldest are erased so at most 7 are kept (first in, first out).
 namespace pulse_log {
 
 void begin();

@@ -6,6 +6,9 @@ version string.
 
 ## Unreleased
 
+- Pulse log keeps the newest 7 logs (one per boot that saw rowing) and
+  erases the oldest first.
+
 ## 1.0.0 — 2026-10-25
 
 First numbered release: the firmware as it runs on the 5" and 7" boards.

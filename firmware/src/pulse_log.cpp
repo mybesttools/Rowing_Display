@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cstdarg>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 
 #include "esp_heap_caps.h"
@@ -12,8 +13,20 @@ namespace pulse_log {
 
 namespace {
 
-constexpr char kHeader[] = "ROWLOG1\n";
-constexpr size_t kHeaderLen = sizeof(kHeader) - 1;
+// The partition is a ring of 4 KB sectors. Each starts with a header naming
+// the log it belongs to (seq) and its place in that log (index), so the
+// fetch script can put the logs back together wherever they wrapped.
+constexpr char kMagic[4] = {'R', 'L', 'G', '2'};
+struct SectorHeader {
+    char magic[4];
+    uint32_t seq;
+    uint32_t index;
+};
+constexpr size_t kSectorSize = 4096;
+constexpr uint32_t kFree = 0xFFFFFFFF;
+// Oldest logs are erased once there are more than this many.
+constexpr uint32_t kKeepLogs = 7;
+
 // Big enough for ~5 min of rowing, so a session is written once it ends.
 constexpr size_t kBufSize = 64 * 1024;
 constexpr size_t kForceFlushAt = kBufSize - 4096;
@@ -21,43 +34,105 @@ constexpr size_t kIdleFlushAt = 8 * 1024;
 constexpr uint32_t kIdleFlushIntervalMs = 60000;
 
 const esp_partition_t* g_part = nullptr;
-size_t g_offset = 0;
-bool g_full = false;
+size_t g_sectorCount = 0;
+uint32_t* g_sectorSeq = nullptr; // per sector: the log it holds, or kFree
+uint32_t g_lastSeq = 0;
+size_t g_nextSector = 0;
+
+// This boot's log; 0 until it first has rowing in it, so boots without any
+// don't push real sessions out.
+uint32_t g_seq = 0;
+uint32_t g_index = 0;
+size_t g_sector = 0;
+size_t g_fill = kSectorSize;
+bool g_hasRowing = false;
+
 char* g_buf = nullptr;
 size_t g_len = 0;
 uint32_t g_lastFlushMs = 0;
 bool g_wasQuiet = true;
 
-size_t findAppendOffset() {
-    uint8_t chunk[1024];
-    for (size_t off = kHeaderLen; off < g_part->size; off += sizeof(chunk)) {
-        const size_t n = std::min<size_t>(sizeof(chunk), g_part->size - off);
-        if (esp_partition_read(g_part, off, chunk, n) != ESP_OK) {
-            return g_part->size;
-        }
-        for (size_t i = 0; i < n; i++) {
-            if (chunk[i] == 0xFF) {
-                return off + i;
-            }
+void eraseLog(uint32_t seq) {
+    for (size_t s = 0; s < g_sectorCount; s++) {
+        if (g_sectorSeq[s] == seq) {
+            esp_partition_erase_range(g_part, s * kSectorSize, kSectorSize);
+            g_sectorSeq[s] = kFree;
         }
     }
-    return g_part->size;
 }
 
-void flush() {
-    if (!g_part || g_full || g_len == 0) {
-        g_len = 0;
-        return;
+uint32_t oldestLog() {
+    uint32_t oldest = kFree;
+    for (size_t s = 0; s < g_sectorCount; s++) {
+        oldest = std::min(oldest, g_sectorSeq[s]);
     }
-    if (g_offset + g_len > g_part->size) {
-        g_full = true;
-        g_len = 0;
-        return;
+    return oldest;
+}
+
+uint32_t logCount() {
+    uint32_t count = 0;
+    for (size_t s = 0; s < g_sectorCount; s++) {
+        if (g_sectorSeq[s] == kFree) {
+            continue;
+        }
+        bool seen = false;
+        for (size_t t = 0; t < s && !seen; t++) {
+            seen = g_sectorSeq[t] == g_sectorSeq[s];
+        }
+        count += seen ? 0 : 1;
     }
-    if (esp_partition_write(g_part, g_offset, g_buf, g_len) == ESP_OK) {
-        g_offset += g_len;
+    return count;
+}
+
+void startSector(size_t s) {
+    // The ring caught up with the oldest log: drop all of it, not just this
+    // sector. A log that fills the whole partition overwrites its own start.
+    if (g_sectorSeq[s] != kFree && g_sectorSeq[s] != g_seq) {
+        eraseLog(g_sectorSeq[s]);
+    }
+    esp_partition_erase_range(g_part, s * kSectorSize, kSectorSize);
+    SectorHeader header;
+    memcpy(header.magic, kMagic, sizeof(kMagic));
+    header.seq = g_seq;
+    header.index = g_index++;
+    esp_partition_write(g_part, s * kSectorSize, &header, sizeof(header));
+    g_sectorSeq[s] = g_seq;
+    g_sector = s;
+    g_fill = sizeof(header);
+    g_nextSector = (s + 1) % g_sectorCount;
+}
+
+void openLog() {
+    while (logCount() >= kKeepLogs) {
+        eraseLog(oldestLog());
+    }
+    g_seq = ++g_lastSeq;
+    g_index = 0;
+    startSector(g_nextSector);
+}
+
+bool flush() {
+    if (!g_sectorSeq || g_len == 0) {
+        return false;
+    }
+    if (g_seq == 0) {
+        if (!g_hasRowing) {
+            return false; // keep the boot lines until there is rowing to log
+        }
+        openLog();
+    }
+    size_t off = 0;
+    while (off < g_len) {
+        if (g_fill == kSectorSize) {
+            startSector(g_nextSector);
+        }
+        const size_t n = std::min(g_len - off, kSectorSize - g_fill);
+        esp_partition_write(g_part, g_sector * kSectorSize + g_fill, g_buf + off, n);
+        g_fill += n;
+        off += n;
     }
     g_len = 0;
+    return true;
 }
 
 } // namespace
@@ -73,23 +148,57 @@ void begin() {
         ::printf("pulse_log: no spiffs partition, logging disabled\n");
         return;
     }
-
-    char header[kHeaderLen];
-    esp_partition_read(g_part, 0, header, kHeaderLen);
-    if (memcmp(header, kHeader, kHeaderLen) != 0) {
-        ::printf("pulse_log: formatting %lu KB log partition...\n", static_cast<unsigned long>(g_part->size / 1024));
-        esp_partition_erase_range(g_part, 0, g_part->size);
-        esp_partition_write(g_part, 0, kHeader, kHeaderLen);
+    g_sectorCount = g_part->size / kSectorSize;
+    g_sectorSeq = static_cast<uint32_t*>(malloc(g_sectorCount * sizeof(uint32_t)));
+    if (!g_sectorSeq) {
+        ::printf("pulse_log: no sector table, logging disabled\n");
+        return;
     }
 
-    g_offset = findAppendOffset();
-    g_full = g_offset >= g_part->size;
-    ::printf("pulse_log: %lu/%lu KB used\n", static_cast<unsigned long>(g_offset / 1024),
-             static_cast<unsigned long>(g_part->size / 1024));
+    bool foreign = false;
+    for (size_t s = 0; s < g_sectorCount; s++) {
+        SectorHeader header;
+        esp_partition_read(g_part, s * kSectorSize, &header, sizeof(header));
+        if (memcmp(header.magic, kMagic, sizeof(kMagic)) == 0) {
+            g_sectorSeq[s] = header.seq;
+        } else {
+            g_sectorSeq[s] = kFree;
+            const auto* bytes = reinterpret_cast<const uint8_t*>(&header);
+            foreign |= std::any_of(bytes, bytes + sizeof(header), [](uint8_t b) { return b != 0xFF; });
+        }
+    }
+    if (foreign) {
+        // Older single-log format, or something else entirely.
+        ::printf("pulse_log: formatting %lu KB log partition...\n", static_cast<unsigned long>(g_part->size / 1024));
+        esp_partition_erase_range(g_part, 0, g_part->size);
+        std::fill(g_sectorSeq, g_sectorSeq + g_sectorCount, kFree);
+    }
+
+    // Carry on after the newest log's last sector.
+    uint32_t newestIndex = 0;
+    for (size_t s = 0; s < g_sectorCount; s++) {
+        if (g_sectorSeq[s] == kFree || g_sectorSeq[s] < g_lastSeq) {
+            continue;
+        }
+        SectorHeader header;
+        esp_partition_read(g_part, s * kSectorSize, &header, sizeof(header));
+        if (g_sectorSeq[s] > g_lastSeq || header.index >= newestIndex) {
+            g_lastSeq = g_sectorSeq[s];
+            newestIndex = header.index;
+            g_nextSector = (s + 1) % g_sectorCount;
+        }
+    }
+
+    size_t used = 0;
+    for (size_t s = 0; s < g_sectorCount; s++) {
+        used += g_sectorSeq[s] == kFree ? 0 : 1;
+    }
+    ::printf("pulse_log: %lu log(s), %lu/%lu KB used\n", static_cast<unsigned long>(logCount()),
+             static_cast<unsigned long>(used * kSectorSize / 1024), static_cast<unsigned long>(g_part->size / 1024));
 }
 
 void printf(const char* fmt, ...) {
-    if (!g_part || g_full) {
+    if (!g_sectorSeq) {
         return;
     }
     char line[160];
@@ -104,6 +213,10 @@ void printf(const char* fmt, ...) {
     if (g_len + len > kBufSize) {
         flush();
     }
+    if (g_len + len > kBufSize) {
+        return;
+    }
+    g_hasRowing |= line[0] == 'P';
     memcpy(g_buf + g_len, line, len);
     g_len += len;
 }
@@ -118,7 +231,9 @@ bool poll(uint32_t nowMs, bool quiet) {
     if (!(sessionEnded || idleDue || g_len >= kForceFlushAt)) {
         return false;
     }
-    flush();
+    if (!flush()) {
+        return false;
+    }
     g_lastFlushMs = nowMs;
     return true;
 }
