@@ -6,6 +6,14 @@ version string.
 
 ## Unreleased
 
+## 1.2.0 — 2026-10-28
+
+- Browser installer on GitHub Pages
+  (https://mybesttools.github.io/Rowing_Display/): pick the display and
+  machine, flash over USB from Chrome or Edge.
+- Each release is built from its tag and attaches one merged image per
+  board and machine, flashable at offset 0.
+
 ## 1.1.0 — 2026-10-27
 
 - Pulse log keeps the newest 7 logs (one per boot that saw rowing) and

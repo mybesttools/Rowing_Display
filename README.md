@@ -45,6 +45,7 @@ each boot (USB or Wi-Fi).
 - Notifies live metrics over BLE FTMS (Indoor Rower Data, two 12-byte
   packets). Start, Stop, Pause, and Reset from an app act on the session.
 - Saves each session to the SD card as `/sessions/<date>_<time>.tcx`.
+- Installs from the browser: see [Install](#install).
 
 See [Hardware.md](Hardware.md) for sensor wiring, board pinouts, and the
 physics model's derivation/attribution. See
@@ -52,11 +53,24 @@ physics model's derivation/attribution. See
 
 ## Install
 
-Flash the latest release from Chrome or Edge, no tools needed:
-**https://mybesttools.github.io/Rowing_Display/**. Pick the display and the
-machine, plug the board in with USB, and click Install. The merged images are
-also attached to each [GitHub release](https://github.com/mybesttools/Rowing_Display/releases)
-for `esptool.py write_flash 0x0 <image>.bin`.
+No tools needed: flash the board from the browser at
+**[mybesttools.github.io/Rowing_Display](https://mybesttools.github.io/Rowing_Display/)**.
+
+[![The web installer](assets/github_pages_flash.png)](https://mybesttools.github.io/Rowing_Display/)
+
+1. Open the page in Chrome or Edge on a desktop computer (Web Serial; Safari
+   and Firefox can't flash).
+2. Connect the board with a USB-C data cable.
+3. Pick the display (5" or 7") and the machine (Kuipers or Dunlop), click
+   **Install firmware** and choose the serial port.
+4. When asked, don't erase to keep your settings; erase to start from the
+   machine preset. Flashing takes about a minute and the board restarts.
+
+The machine choice only sets the first-boot preset; it can be changed under
+Settings on the device. The page always serves the latest release. Each
+[GitHub release](https://github.com/mybesttools/Rowing_Display/releases) also
+has the four merged images (`rowing-display-<version>-<env>.bin`) for
+`esptool.py --chip esp32s3 write_flash 0x0 <image>.bin`.
 
 ## Build
 
