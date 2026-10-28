@@ -50,6 +50,14 @@ See [Hardware.md](Hardware.md) for sensor wiring, board pinouts, and the
 physics model's derivation/attribution. See
 [firmware/README.md](firmware/README.md) for the firmware source layout.
 
+## Install
+
+Flash the latest release from Chrome or Edge, no tools needed:
+**https://mybesttools.github.io/Rowing_Display/**. Pick the display and the
+machine, plug the board in with USB, and click Install. The merged images are
+also attached to each [GitHub release](https://github.com/mybesttools/Rowing_Display/releases)
+for `esptool.py write_flash 0x0 <image>.bin`.
+
 ## Build
 
 Requires [PlatformIO](https://platformio.org/). From the repo root:
@@ -91,6 +99,13 @@ Device Information firmware revision.
 
 To release: set `VERSION`, move the `Unreleased` notes in `CHANGELOG.md`
 under the new number, commit, then `git tag v<VERSION>` and push the tag.
+The tag runs `.github/workflows/release.yml`: it builds all four
+board/machine variants, creates the GitHub release (notes from the
+`CHANGELOG.md` section, merged images attached) and publishes the browser
+installer to GitHub Pages. `scripts/build_web_installer.py` does the same
+build locally into `.pio/web-installer/`; serve that folder
+(`python3 -m http.server -d .pio/web-installer`) and open it in Chrome to
+test the page.
 
 ## Backgrounds
 
