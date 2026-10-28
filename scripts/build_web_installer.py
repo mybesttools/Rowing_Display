@@ -65,10 +65,10 @@ def flash_images(env: str) -> list[tuple[int, Path]]:
     return sorted(images)
 
 
-def merge(env: str, dest: Path) -> None:
+def merge(images: list[tuple[int, Path]], dest: Path) -> None:
     args = [sys.executable, "-m", "esptool", "--chip", "esp32s3", "merge_bin", "-o", str(dest),
             "--flash_mode", "keep", "--flash_freq", "keep", "--flash_size", "keep"]
-    for offset, path in flash_images(env):
+    for offset, path in images:
         args += [hex(offset), str(path)]
     subprocess.run(args, cwd=ROOT, check=True)
 
@@ -110,10 +110,14 @@ def main() -> None:
 
     for build in BUILDS:
         env = build["env"]
+        # Ask for the layout before building: on a fresh checkout the build
+        # adds firmware_version.cpp, which changes PlatformIO's project
+        # checksum, and a metadata call after that wipes .pio/build.
+        images = flash_images(env)
         if not args.skip_build:
             subprocess.run([*pio_cmd(), "run", "-e", env], cwd=ROOT, check=True)
         image = out / "firmware" / f"{env}.bin"
-        merge(env, image)
+        merge(images, image)
         shutil.copy(image, out / "release" / f"rowing-display-{version}-{env}.bin")
         (out / f"manifest-{env}.json").write_text(json.dumps(manifest(build, version), indent=2) + "\n")
 
