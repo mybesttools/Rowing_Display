@@ -25,6 +25,12 @@ jobs:
           ref: ${{ env.TAG }}
           fetch-depth: 0  # tags, so the build stamps the plain release number
 
+      # Installer script and page from this workflow's commit, so older tags
+      # (made before them) can be rebuilt. Untracked: the build stays clean.
+      - uses: actions/checkout@v4
+        with:
+          path: .installer
+
       - name: Check VERSION matches the tag
         run: test "v$(cat VERSION)" = "$TAG" || { echo "VERSION is $(cat VERSION), tag is $TAG"; exit 1; }
 
@@ -43,7 +49,7 @@ jobs:
         run: pip install platformio esptool==4.8.1
 
       - name: Build firmware and installer
-        run: PIO=pio python scripts/build_web_installer.py --out site
+        run: PIO=pio python .installer/scripts/build_web_installer.py --project . --out site
 
       - uses: actions/upload-artifact@v4
         with:

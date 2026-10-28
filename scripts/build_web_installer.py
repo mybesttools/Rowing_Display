@@ -34,7 +34,10 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from firmware_version import firmware_version  # noqa: E402
 
-ROOT = Path(__file__).resolve().parent.parent
+# The page comes from this checkout; the firmware from --project, so the
+# workflow can rebuild a tag made before this script existed.
+HERE = Path(__file__).resolve().parent.parent
+ROOT = HERE
 APP_OFFSET = 0x10000  # app0 in the Arduino default partition tables
 INSTALLER_URL = "https://mybesttools.github.io/Rowing_Display/"
 
@@ -92,9 +95,12 @@ def release_notes() -> str:
 
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    ap.add_argument("--out", type=Path, default=ROOT / ".pio" / "web-installer")
+    ap.add_argument("--out", type=Path, default=HERE / ".pio" / "web-installer")
     ap.add_argument("--skip-build", action="store_true", help="reuse existing .pio/build output")
+    ap.add_argument("--project", type=Path, default=HERE, help="repo checkout to build (default: this one)")
     args = ap.parse_args()
+    global ROOT
+    ROOT = args.project.resolve()
 
     version = firmware_version(ROOT)
     out: Path = args.out
@@ -111,10 +117,10 @@ def main() -> None:
         shutil.copy(image, out / "release" / f"rowing-display-{version}-{env}.bin")
         (out / f"manifest-{env}.json").write_text(json.dumps(manifest(build, version), indent=2) + "\n")
 
-    page = (ROOT / "web" / "index.html").read_text(encoding="utf-8")
+    page = (HERE / "web" / "index.html").read_text(encoding="utf-8")
     (out / "index.html").write_text(page.replace("{{VERSION}}", version), encoding="utf-8")
-    shutil.copy(ROOT / "hardware" / "in-action.jpg", out / "in-action.jpg")
-    (out / "release-notes.md").write_text(release_notes(),encoding="utf-8")
+    shutil.copy(HERE / "hardware" / "in-action.jpg", out / "in-action.jpg")
+    (out / "release-notes.md").write_text(release_notes(), encoding="utf-8")
     print(f"web installer {version} -> {out}")
 
 
