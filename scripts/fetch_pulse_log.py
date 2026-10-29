@@ -16,6 +16,7 @@ Line format:
     P,ms                      pulse handed to the metrics model
     S,ms,reads,lockFails,i2cFails,maxGapMs   poll coverage over the last second
     M,ms,rpm,spm,watts,dist,strokes,phase,drag   metrics snapshot (phase 0/1/2 = idle/drive/recovery)
+    D,ms,count                lines dropped while rowing (buffer full; E/S/M go first)
 """
 
 import argparse

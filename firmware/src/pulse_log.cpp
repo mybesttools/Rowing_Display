@@ -27,9 +27,13 @@ constexpr uint32_t kFree = 0xFFFFFFFF;
 // Oldest logs are erased once there are more than this many.
 constexpr uint32_t kKeepLogs = 7;
 
-// Big enough for ~5 min of rowing, so a session is written once it ends.
+// Only written to flash between sessions: a flash write while rowing makes
+// the RGB panel drift and resyncDisplay() does not always bring it back
+// (2026-10-29: forced flush 8.8 min into a session, frame stayed shifted).
+// Full detail for ~4 min of rowing, then only pulses and session events
+// (~27 B/s) until full, ~20 min more; what does not fit is dropped.
 constexpr size_t kBufSize = 64 * 1024;
-constexpr size_t kForceFlushAt = kBufSize - 4096;
+constexpr size_t kPulsesOnlyAt = kBufSize / 2;
 constexpr size_t kIdleFlushAt = 8 * 1024;
 constexpr uint32_t kIdleFlushIntervalMs = 60000;
 
@@ -51,6 +55,7 @@ char* g_buf = nullptr;
 size_t g_len = 0;
 uint32_t g_lastFlushMs = 0;
 bool g_wasQuiet = true;
+uint32_t g_dropped = 0;
 
 void eraseLog(uint32_t seq) {
     for (size_t s = 0; s < g_sectorCount; s++) {
@@ -210,10 +215,9 @@ void printf(const char* fmt, ...) {
         return;
     }
     const size_t len = std::min(static_cast<size_t>(n), sizeof(line) - 1);
-    if (g_len + len > kBufSize) {
-        flush();
-    }
-    if (g_len + len > kBufSize) {
+    const bool event = line[0] == 'P' || line[0] == 'R' || line[0] == 'B' || line[0] == 'C';
+    if (g_len + len > kBufSize || (g_len >= kPulsesOnlyAt && !event)) {
+        g_dropped++;
         return;
     }
     g_hasRowing |= line[0] == 'P';
@@ -228,8 +232,13 @@ bool poll(uint32_t nowMs, bool quiet) {
         return false;
     }
     const bool idleDue = quiet && (g_len >= kIdleFlushAt || nowMs - g_lastFlushMs >= kIdleFlushIntervalMs);
-    if (!(sessionEnded || idleDue || g_len >= kForceFlushAt)) {
+    if (!(sessionEnded || idleDue)) {
         return false;
+    }
+    if (g_dropped > 0 && g_len + 32 <= kBufSize) {
+        g_len += snprintf(g_buf + g_len, 32, "D,%lu,%lu\n", static_cast<unsigned long>(nowMs),
+                          static_cast<unsigned long>(g_dropped));
+        g_dropped = 0;
     }
     if (!flush()) {
         return false;

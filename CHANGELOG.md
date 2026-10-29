@@ -6,6 +6,13 @@ version string.
 
 ## Unreleased
 
+## 1.2.1 — 2026-10-29
+
+- Fix: the screen could shift sideways and stay torn about 9 minutes into
+  a session, when the pulse log wrote to flash mid-session. The log now
+  only writes between sessions; on long sessions it keeps pulses only and
+  drops what no longer fits.
+
 ## 1.2.0 — 2026-10-28
 
 - Browser installer on GitHub Pages

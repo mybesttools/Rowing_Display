@@ -10,9 +10,10 @@ namespace pulse_log {
 
 void begin();
 void printf(const char* fmt, ...) __attribute__((format(printf, 1, 2)));
-// Writes buffered lines to flash, but only while `quiet` (not rowing) or when
-// the buffer is nearly full: a flash write stalls PSRAM and makes the RGB
-// panel drift. Returns true when it wrote, so the caller can re-sync it.
+// Writes buffered lines to flash, but only while `quiet` (not rowing): a flash
+// write stalls PSRAM and makes the RGB panel drift. While rowing, lines that
+// no longer fit are dropped (counted in a D line). Returns true when it
+// wrote, so the caller can re-sync the panel.
 bool poll(uint32_t nowMs, bool quiet);
 
 } // namespace pulse_log
