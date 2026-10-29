@@ -24,7 +24,7 @@ Two board options, same UI/pipeline on both:
 - Waveshare ESP32-S3-Touch-LCD-5 (800×480, compact)
 
 The hardware is also available in our shop:
-https://www.mybesttools.com/shop
+<https://www.mybesttools.com/shop>
 
 Both boards have a LiPo battery connector with an onboard charger. Neither
 board exposes battery voltage to the MCU, so the firmware has no battery
