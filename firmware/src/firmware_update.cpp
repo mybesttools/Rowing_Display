@@ -6,14 +6,9 @@
 #include <cstring>
 
 #include "firmware_version.h"
+#include "version_util.h"
 
-// Written at build time by scripts/firmware_version.py.
-#if __has_include("firmware_info.h")
-#include "firmware_info.h"
-#endif
-#ifndef FIRMWARE_VERSION
-#define FIRMWARE_VERSION "dev"
-#endif
+// The PlatformIO environment, defined by scripts/firmware_version.py.
 #ifndef FIRMWARE_VARIANT
 #define FIRMWARE_VARIANT "unknown"
 #endif
@@ -28,7 +23,7 @@
 namespace firmware_update {
 
 const char* version() {
-    return FIRMWARE_VERSION;
+    return kFirmwareVersion;
 }
 
 const char* variant() {
@@ -160,7 +155,7 @@ bool install(const char* url, const char* newVersion, StatusFn status) {
 } // namespace
 
 const char* version() {
-    return FIRMWARE_VERSION;
+    return kFirmwareVersion;
 }
 
 const char* variant() {
@@ -168,8 +163,10 @@ const char* variant() {
 }
 
 Result checkAndInstall(StatusFn status) {
+    // A release build is the bare number; anything else ("1.2.1+f920599",
+    // "1.2.1+f920599.dirty") is a local build and stays as it is.
     int ignored[3];
-    if (!firmware_version::parse(version(), ignored)) {
+    if (!version_util::parse(version(), ignored) || strchr(version(), '+') != nullptr) {
         printf("update: development build %s, not checking for updates\n", version());
         return Result::Skipped;
     }
@@ -181,13 +178,13 @@ Result checkAndInstall(StatusFn status) {
     }
     char latest[24];
     char path[96];
-    if (!firmware_version::jsonString(manifest, "version", latest, sizeof(latest)) ||
-        !firmware_version::jsonString(manifest, variant(), path, sizeof(path))) {
+    if (!version_util::jsonString(manifest, "version", latest, sizeof(latest)) ||
+        !version_util::jsonString(manifest, variant(), path, sizeof(path))) {
         printf("update: no version or no build for %s in latest.json\n", variant());
         report(status, "update check failed");
         return Result::Failed;
     }
-    if (!firmware_version::isNewer(latest, version())) {
+    if (!version_util::isNewer(latest, version())) {
         printf("update: running %s, latest is %s\n", version(), latest);
         return Result::UpToDate;
     }

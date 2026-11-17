@@ -2,6 +2,7 @@
 
 #include <NimBLEDevice.h>
 
+#include "firmware_version.h"
 #include "ftms_encoder.h"
 
 namespace {
@@ -11,6 +12,9 @@ constexpr char FTMS_ROWER_DATA_CHAR_UUID[] = "2AD1";
 constexpr char FTMS_FEATURE_CHAR_UUID[] = "2ACC";
 constexpr char FTMS_CONTROL_POINT_CHAR_UUID[] = "2AD9";
 constexpr char FTMS_STATUS_CHAR_UUID[] = "2ADA";
+constexpr char DEVICE_INFO_SERVICE_UUID[] = "180A";
+constexpr char MANUFACTURER_NAME_CHAR_UUID[] = "2A29";
+constexpr char FIRMWARE_REVISION_CHAR_UUID[] = "2A26";
 
 NimBLECharacteristic* g_rowerChar = nullptr;
 NimBLECharacteristic* g_controlPointChar = nullptr;
@@ -78,6 +82,12 @@ void BleFtmsService::begin(const String& deviceName) {
     // client that connected once made the device permanently
     // undiscoverable on the next scan until this was added.
     server->advertiseOnDisconnect(true);
+
+    // Device Information: apps show the firmware revision in their sensor
+    // details.
+    NimBLEService* info = server->createService(DEVICE_INFO_SERVICE_UUID);
+    info->createCharacteristic(MANUFACTURER_NAME_CHAR_UUID, NIMBLE_PROPERTY::READ)->setValue("Rowing Display");
+    info->createCharacteristic(FIRMWARE_REVISION_CHAR_UUID, NIMBLE_PROPERTY::READ)->setValue(kFirmwareVersion);
     NimBLEService* service = server->createService(FTMS_SERVICE_UUID);
 
     g_rowerChar = service->createCharacteristic(FTMS_ROWER_DATA_CHAR_UUID, NIMBLE_PROPERTY::NOTIFY);

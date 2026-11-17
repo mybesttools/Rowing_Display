@@ -6,7 +6,7 @@
 
 #include "background_convert.h"
 #include "config.h"
-#include "firmware_version.h"
+#include "version_util.h"
 #include "ftms_encoder.h"
 #include "metrics_model.h"
 
@@ -369,35 +369,35 @@ void test_background_convert_finds_the_mirror_line() {
 
 void test_firmware_version_compare() {
     int v[3];
-    TEST_ASSERT_TRUE(firmware_version::parse("v1.2.3", v));
+    TEST_ASSERT_TRUE(version_util::parse("v1.2.3", v));
     TEST_ASSERT_EQUAL_INT(1, v[0]);
     TEST_ASSERT_EQUAL_INT(2, v[1]);
     TEST_ASSERT_EQUAL_INT(3, v[2]);
-    TEST_ASSERT_TRUE(firmware_version::parse("1.2.3-4-gabc1234-dirty", v));
-    TEST_ASSERT_FALSE(firmware_version::parse("abc1234", v));
-    TEST_ASSERT_FALSE(firmware_version::parse("1.2", v));
-    TEST_ASSERT_FALSE(firmware_version::parse("1.2.3abc", v));
+    TEST_ASSERT_TRUE(version_util::parse("1.2.3-4-gabc1234-dirty", v));
+    TEST_ASSERT_FALSE(version_util::parse("abc1234", v));
+    TEST_ASSERT_FALSE(version_util::parse("1.2", v));
+    TEST_ASSERT_FALSE(version_util::parse("1.2.3abc", v));
 
-    TEST_ASSERT_TRUE(firmware_version::isNewer("1.10.0", "1.9.9"));
-    TEST_ASSERT_TRUE(firmware_version::isNewer("2.0.0", "1.2.3-4-gabc1234"));
-    TEST_ASSERT_FALSE(firmware_version::isNewer("1.2.3", "1.2.3"));
-    TEST_ASSERT_FALSE(firmware_version::isNewer("1.2.3", "1.2.3-4-gabc1234"));
-    TEST_ASSERT_FALSE(firmware_version::isNewer("1.0.0", "1.2.0"));
+    TEST_ASSERT_TRUE(version_util::isNewer("1.10.0", "1.9.9"));
+    TEST_ASSERT_TRUE(version_util::isNewer("2.0.0", "1.2.3-4-gabc1234"));
+    TEST_ASSERT_FALSE(version_util::isNewer("1.2.3", "1.2.3"));
+    TEST_ASSERT_FALSE(version_util::isNewer("1.2.3", "1.2.3-4-gabc1234"));
+    TEST_ASSERT_FALSE(version_util::isNewer("1.0.0", "1.2.0"));
     // A development build (commit hash) is never replaced.
-    TEST_ASSERT_FALSE(firmware_version::isNewer("9.9.9", "abc1234-dirty"));
+    TEST_ASSERT_FALSE(version_util::isNewer("9.9.9", "abc1234-dirty"));
 }
 
 void test_firmware_manifest_lookup() {
     const char* json = "{\n  \"version\": \"1.4.0\",\n  \"esp32-s3-lcd5\": \"esp32-s3-lcd5/firmware.bin\",\n"
                        "  \"esp32-s3-lcd5-kuipers\": \"esp32-s3-lcd5-kuipers/firmware.bin\"\n}";
     char out[64];
-    TEST_ASSERT_TRUE(firmware_version::jsonString(json, "version", out, sizeof(out)));
+    TEST_ASSERT_TRUE(version_util::jsonString(json, "version", out, sizeof(out)));
     TEST_ASSERT_EQUAL_STRING("1.4.0", out);
     // A key that is a prefix of another only matches itself.
-    TEST_ASSERT_TRUE(firmware_version::jsonString(json, "esp32-s3-lcd5", out, sizeof(out)));
+    TEST_ASSERT_TRUE(version_util::jsonString(json, "esp32-s3-lcd5", out, sizeof(out)));
     TEST_ASSERT_EQUAL_STRING("esp32-s3-lcd5/firmware.bin", out);
-    TEST_ASSERT_FALSE(firmware_version::jsonString(json, "esp32-s3-devkitc-1", out, sizeof(out)));
-    TEST_ASSERT_FALSE(firmware_version::jsonString(json, "esp32-s3-lcd5-kuipers", out, 8)); // too long
+    TEST_ASSERT_FALSE(version_util::jsonString(json, "esp32-s3-devkitc-1", out, sizeof(out)));
+    TEST_ASSERT_FALSE(version_util::jsonString(json, "esp32-s3-lcd5-kuipers", out, 8)); // too long
 }
 
 int main(int, char **) {

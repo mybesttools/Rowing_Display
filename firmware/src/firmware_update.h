@@ -7,7 +7,8 @@
 // certificate dates).
 namespace firmware_update {
 
-// This build's version ("1.2.0", or git describe output for a local build)
+// This build's version (kFirmwareVersion: "1.2.0", or "1.2.0+<commit>" for a
+// local build)
 // and PlatformIO environment (which binary to fetch).
 const char* version();
 const char* variant();

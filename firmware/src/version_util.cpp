@@ -1,10 +1,10 @@
-#include "firmware_version.h"
+#include "version_util.h"
 
 #include <cctype>
 #include <cstdio>
 #include <cstring>
 
-namespace firmware_version {
+namespace version_util {
 
 bool parse(const char* s, int out[3]) {
     if (s == nullptr) {
@@ -87,4 +87,4 @@ bool jsonString(const char* json, const char* key, char* out, size_t outSize) {
     return false;
 }
 
-} // namespace firmware_version
+} // namespace version_util

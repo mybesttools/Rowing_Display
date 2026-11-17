@@ -1,68 +1,105 @@
-# Builds every board/machine variant for a version tag (v1.2.0), attaches the
-# binaries to a GitHub Release, and publishes the GitHub Pages site: the web
-# installer plus firmware/latest.json, which the displays check for updates
-# when they sync their clock (firmware/src/firmware_update.h).
-#
-# One-time setup: Settings > Pages > Source: "GitHub Actions".
+# On a v<VERSION> tag: build every board/machine variant, attach the merged
+# images to the GitHub release, and publish the browser installer to GitHub
+# Pages. Run it by hand (Actions > Release > Run workflow) to rebuild an
+# existing tag. See scripts/build_web_installer.py.
 name: Release
 
 on:
   push:
-    tags: ["v*.*.*"]
-
-permissions:
-  contents: write
-  pages: write
-  id-token: write
-
-concurrency:
-  group: pages
-  cancel-in-progress: false
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing tag to build and publish, e.g. v1.1.0
+        required: true
 
 env:
-  ENVS: esp32-s3-devkitc-1 esp32-s3-devkitc-1-kuipers esp32-s3-lcd5 esp32-s3-lcd5-kuipers
+  TAG: ${{ inputs.tag || github.ref_name }}
 
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
+          fetch-depth: 0  # tags, so the build stamps the plain release number
+
+      # Installer script and page from this workflow's commit, so older tags
+      # (made before them) can be rebuilt. Untracked: the build stays clean.
+      - uses: actions/checkout@v4
+        with:
+          path: .installer
+
+      - name: Check VERSION matches the tag
+        run: test "v$(cat VERSION)" = "$TAG" || { echo "VERSION is $(cat VERSION), tag is $TAG"; exit 1; }
+
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
+
       - uses: actions/cache@v4
         with:
           path: |
             ~/.platformio
-            ~/.cache/pip
+            .pio/libdeps
           key: pio-${{ runner.os }}-${{ hashFiles('platformio.ini') }}
-      - name: Install PlatformIO
-        run: pip install platformio
-      - name: Unit tests
-        run: pio test -e native-test
-      - name: Build
-        run: |
-          export FIRMWARE_VERSION="${GITHUB_REF_NAME#v}"
-          for e in $ENVS; do pio run -e "$e"; done
-      - name: Assemble site
-        run: python3 scripts/build_site.py --version "${GITHUB_REF_NAME#v}" --out site $ENVS
-      - name: Release
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          mkdir release
-          for e in $ENVS; do cp "site/firmware/$e/firmware.bin" "release/$e.bin"; done
-          gh release create "$GITHUB_REF_NAME" release/*.bin --title "$GITHUB_REF_NAME" --generate-notes
+
+      - name: Install PlatformIO and esptool
+        run: pip install platformio esptool==4.8.1
+
+      - name: Build firmware and installer
+        run: PIO=pio python .installer/scripts/build_web_installer.py --project . --out site
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: site
+          path: site
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: site
+          path: site
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.TAG }}
+          name: Rowing Display ${{ env.TAG }}
+          body_path: site/release-notes.md
+          files: site/release/*.bin
+
+  pages:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    concurrency:
+      group: pages
+      cancel-in-progress: false
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: site
+          path: site
+
+      - name: Keep only the installer page
+        run: rm -rf site/release site/release-notes.md
+
+      - uses: actions/configure-pages@v5
+
       - uses: actions/upload-pages-artifact@v3
         with:
           path: site
 
-  deploy:
-    needs: build
-    runs-on: ubuntu-latest
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
-    steps:
-      - id: deployment
+      - id: deploy
         uses: actions/deploy-pages@v4

@@ -8,6 +8,7 @@
 #include "ble_ftms.h"
 #include "config.h"
 #include "firmware_update.h"
+#include "firmware_version.h"
 #include "metrics_model.h"
 #include "net_time.h"
 #include "panel_runtime.h"
@@ -199,6 +200,7 @@ void pollSerialCommands(uint32_t nowMs) {
                 const uint32_t ms = millis();
                 g_lastPulseMs = ms;
                 g_model.onPulseMicros(micros(), ms);
+                pulse_log::printf("P,%lu\n", static_cast<unsigned long>(ms));
             }
             len = 0;
         } else if (len + 1 < sizeof(line)) {
@@ -254,9 +256,9 @@ void setup() {
     // secondary console directly and are what actually reach the USB port, so
     // that's what all logging below uses instead of Serial.print*.
     Serial.begin(cfg::SERIAL_BAUD);
+    printf("Rowing display firmware %s (%s)\n", kFirmwareVersion, firmware_update::variant());
 
     waveshare7::logBoardProfile();
-    printf("firmware %s (%s)\n", firmware_update::version(), firmware_update::variant());
 
     pulse_log::begin();
     pulse_log::printf("B,%lu\n", static_cast<unsigned long>(millis()));
@@ -287,7 +289,7 @@ void setup() {
     panel_runtime::buildScreens();
     firmware_update::markBootOk();
 
-    printf("Rowing display starter scaffold ready\n");
+    printf("ready\n");
 }
 
 void loop() {

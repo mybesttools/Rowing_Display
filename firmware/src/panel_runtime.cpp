@@ -54,7 +54,7 @@ void resyncDisplay() {}
 #include "esp_heap_caps.h"
 #include "esp_lcd_panel_rgb.h"
 #include "esp_lv_adapter_arduino.h"
-#include "firmware_update.h"
+#include "firmware_version.h"
 #include "pace_boat.h"
 #include "rtc_clock.h"
 #include "rower_scene.h"
@@ -402,6 +402,15 @@ lv_obj_t* makeMenuButton(lv_obj_t* parent, const char* text, lv_event_cb_t onCli
     return btn;
 }
 
+void addVersionLabel(lv_obj_t* screen) {
+    lv_obj_t* label = lv_label_create(screen);
+    lv_obj_add_flag(label, LV_OBJ_FLAG_IGNORE_LAYOUT);
+    lv_obj_set_style_text_color(label, kColorHint, 0);
+    lv_obj_set_style_text_font(label, &lv_font_montserrat_14, 0);
+    lv_obj_align(label, LV_ALIGN_BOTTOM_RIGHT, -16, -12);
+    lv_label_set_text_fmt(label, "v%s", kFirmwareVersion);
+}
+
 void buildSplashScreen() {
     g_splashScreen = lv_obj_create(nullptr);
     lv_obj_set_style_bg_color(g_splashScreen, kColorBg, 0);
@@ -420,12 +429,7 @@ void buildSplashScreen() {
     lv_obj_set_style_text_font(g_splashStatus, &lv_font_montserrat_24, 0);
     lv_label_set_text(g_splashStatus, "Starting...");
 
-    lv_obj_t* version = lv_label_create(g_splashScreen);
-    lv_obj_add_flag(version, LV_OBJ_FLAG_IGNORE_LAYOUT);
-    lv_label_set_text_fmt(version, "v%s", firmware_update::version());
-    lv_obj_set_style_text_color(version, kColorHint, 0);
-    lv_obj_set_style_text_font(version, &lv_font_montserrat_14, 0);
-    lv_obj_align(version, LV_ALIGN_BOTTOM_MID, 0, -16);
+    addVersionLabel(g_splashScreen);
 }
 
 void buildHomeScreen() {
@@ -455,6 +459,8 @@ void buildHomeScreen() {
     lv_obj_set_style_text_font(g_homeClock, &lv_font_montserrat_24, 0);
     lv_obj_align(g_homeClock, LV_ALIGN_TOP_RIGHT, -16, 12);
     lv_label_set_text(g_homeClock, "");
+
+    addVersionLabel(g_homeScreen);
 }
 
 void buildSessionScreen() {

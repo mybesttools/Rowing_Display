@@ -1,0 +1,181 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Rowing Display Installer</title>
+<meta name="description" content="Flash the Rowing Display firmware to a Waveshare ESP32-S3 touch display from your browser.">
+<script type="module" src="https://unpkg.com/esp-web-tools@10.2.1/dist/web/install-button.js?module"></script>
+<style>
+  :root {
+    --bg: #f4f1ec;
+    --card: #ffffff;
+    --ink: #1d2433;
+    --muted: #5d6677;
+    --line: #e2ddd5;
+    --accent: #d9692b;
+    --accent-ink: #ffffff;
+    --hero-from: #1f2a44;
+    --hero-to: #c8643a;
+    --code: #efeae2;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #12161f;
+      --card: #1b2130;
+      --ink: #e8e9ee;
+      --muted: #9aa3b5;
+      --line: #2b3346;
+      --accent: #f0864a;
+      --accent-ink: #1a1208;
+      --hero-from: #151c30;
+      --hero-to: #8a3f1f;
+      --code: #252c3d;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font: 16px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  }
+  a { color: var(--accent); }
+  .hero {
+    background: linear-gradient(160deg, var(--hero-from) 30%, var(--hero-to));
+    color: #fff;
+    padding: 48px 16px 96px;
+  }
+  .hero-inner, main { max-width: 760px; margin: 0 auto; }
+  .hero h1 { margin: 0 0 6px; font-size: clamp(28px, 6vw, 40px); letter-spacing: -0.02em; }
+  .hero p { margin: 0; opacity: 0.85; max-width: 560px; }
+  .version {
+    display: inline-block; margin-bottom: 14px; padding: 2px 10px;
+    border: 1px solid rgba(255,255,255,0.35); border-radius: 999px;
+    font-size: 13px; font-variant-numeric: tabular-nums;
+  }
+  main { padding: 0 16px 48px; margin-top: -64px; }
+  .card {
+    background: var(--card); border: 1px solid var(--line); border-radius: 14px;
+    padding: 24px; margin-bottom: 20px;
+  }
+  .card h2 { margin: 0 0 14px; font-size: 19px; }
+  .photo {
+    width: 100%; height: 280px; object-fit: cover; object-position: center 52%;
+    border-radius: 10px; display: block; margin-bottom: 20px;
+  }
+  .choices { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 20px; }
+  @media (max-width: 560px) { .choices { grid-template-columns: 1fr; } }
+  fieldset { border: 0; margin: 0; padding: 0; }
+  legend { font-weight: 600; margin-bottom: 8px; font-size: 14px; }
+  label.opt {
+    display: flex; gap: 10px; align-items: flex-start; padding: 10px 12px;
+    border: 1px solid var(--line); border-radius: 10px; margin-bottom: 8px; cursor: pointer;
+  }
+  label.opt:has(input:checked) { border-color: var(--accent); }
+  label.opt input { margin-top: 4px; accent-color: var(--accent); }
+  label.opt small { display: block; color: var(--muted); }
+  .install { display: flex; flex-wrap: wrap; align-items: center; gap: 14px; }
+  .btn {
+    background: var(--accent); color: var(--accent-ink); border: 0; border-radius: 10px;
+    padding: 12px 22px; font: inherit; font-weight: 600; cursor: pointer;
+  }
+  .hint { color: var(--muted); font-size: 14px; }
+  .warn {
+    background: var(--code); border-radius: 10px; padding: 12px 14px; font-size: 14px;
+  }
+  ol, ul { padding-left: 22px; margin: 0; }
+  li { margin-bottom: 6px; }
+  code { background: var(--code); padding: 1px 6px; border-radius: 5px; font-size: 0.9em; }
+  footer { text-align: center; color: var(--muted); font-size: 14px; }
+  footer a { margin: 0 8px; }
+</style>
+</head>
+<body>
+<header class="hero">
+  <div class="hero-inner">
+    <span class="version">Firmware {{VERSION}}</span>
+    <h1>Rowing Display</h1>
+    <p>A colour touch console for home rowing machines. Plug the display into this computer with USB and flash it from this page. You don't need to install anything.</p>
+  </div>
+</header>
+
+<main>
+  <section class="card">
+    <img class="photo" src="in-action.jpg" alt="The 5 inch display mounted on a Kuipers AquaRower, mid-session">
+
+    <div class="choices">
+      <fieldset>
+        <legend>Display</legend>
+        <label class="opt"><input type="radio" name="board" value="lcd5" checked>
+          <span>Waveshare 5"<small>ESP32-S3-Touch-LCD-5</small></span></label>
+        <label class="opt"><input type="radio" name="board" value="devkitc-1">
+          <span>Waveshare 7"<small>ESP32-S3-Touch-LCD-7</small></span></label>
+      </fieldset>
+      <fieldset>
+        <legend>Rowing machine</legend>
+        <label class="opt"><input type="radio" name="machine" value="kuipers" checked>
+          <span>Kuipers AquaRower<small>Water resistance</small></span></label>
+        <label class="opt"><input type="radio" name="machine" value="dunlop">
+          <span>Dunlop Air Rower 750<small>Air resistance</small></span></label>
+      </fieldset>
+    </div>
+
+    <div class="install">
+      <esp-web-install-button id="install">
+        <button slot="activate" class="btn">Install firmware</button>
+        <span slot="unsupported" class="warn">Your browser can't flash over USB. Use Chrome or Edge on a desktop computer.</span>
+        <span slot="not-allowed" class="warn">Flashing needs a secure page (https).</span>
+      </esp-web-install-button>
+      <span class="hint">The machine only sets the first-boot preset. You can change it later under Settings.</span>
+    </div>
+  </section>
+
+  <section class="card">
+    <h2>How to flash</h2>
+    <ol>
+      <li>Connect the display to this computer with a USB-C data cable.</li>
+      <li>Pick your display and machine above, then click <b>Install firmware</b> and choose the serial port.</li>
+      <li>When it asks whether to erase the device: <b>don't erase</b> keeps your settings. <b>Erase</b> resets them to the preset.</li>
+      <li>Flashing takes about a minute. The display restarts by itself when it's done.</li>
+    </ol>
+  </section>
+
+  <section class="card">
+    <h2>If it doesn't connect</h2>
+    <ul>
+      <li>No port in the list: try another cable. Many USB-C cables only carry power.</li>
+      <li>The port shows up but flashing doesn't start: unplug the cable, hold the <b>BOOT</b> button while you plug it back in, let go, and try again. Unplug and replug once more after flashing.</li>
+      <li>Close any other program that has the port open, such as a serial monitor or PlatformIO.</li>
+    </ul>
+  </section>
+
+  <section class="card">
+    <h2>After installing</h2>
+    <ul>
+      <li>Scene backgrounds and session files use the SD card. See <a href="https://github.com/mybesttools/Rowing_Display#backgrounds">Backgrounds</a> in the README.</li>
+      <li>Sensor wiring for each machine is in <a href="https://github.com/mybesttools/Rowing_Display/blob/main/Hardware.md">Hardware.md</a>.</li>
+      <li>To flash from the command line instead, download the image for your board from the <a href="https://github.com/mybesttools/Rowing_Display/releases/latest">latest release</a> and write it at offset 0: <code>esptool.py write_flash 0x0 rowing-display-…bin</code></li>
+    </ul>
+  </section>
+
+  <footer>
+    <a href="https://github.com/mybesttools/Rowing_Display">GitHub</a>
+    <a href="https://github.com/mybesttools/Rowing_Display/releases">Releases</a>
+    <a href="https://github.com/mybesttools/Rowing_Display/blob/main/CHANGELOG.md">Changelog</a>
+  </footer>
+</main>
+
+<script>
+  const button = document.getElementById("install");
+  function pick(name) { return document.querySelector(`input[name=${name}]:checked`).value; }
+  function update() {
+    const env = "esp32-s3-" + pick("board") + (pick("machine") === "kuipers" ? "-kuipers" : "");
+    button.manifest = `manifest-${env}.json`;
+    button.setAttribute("manifest", button.manifest);
+  }
+  document.querySelectorAll("input[type=radio]").forEach((el) => el.addEventListener("change", update));
+  update();
+</script>
+</body>
+</html>

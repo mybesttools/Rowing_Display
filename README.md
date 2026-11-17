@@ -14,10 +14,17 @@ tunable on the device under Settings, see Hardware.md):
 - **Dunlop Air Rower 750** (air resistance, flywheel/fan)
 - **Kuipers AquaRower** (water resistance, paddle-wheel tank)
 
+The plan is a Hall sensor on both machines. The Kuipers console currently
+reads that rower's stock reed. Whether a Hall can be mounted on the
+paddle wheel is still to be checked on the machine; see Hardware.md.
+
 Two board options, same UI/pipeline on both:
 
 - Waveshare ESP32-S3-Touch-LCD-7 (800×480, dev board)
 - Waveshare ESP32-S3-Touch-LCD-5 (800×480, compact)
+
+The hardware is also available in our shop:
+<https://www.mybesttools.com/shop>
 
 Both boards have a LiPo battery connector with an onboard charger. Neither
 board exposes battery voltage to the MCU, so the firmware has no battery
@@ -41,10 +48,32 @@ each boot (USB or Wi-Fi).
 - Notifies live metrics over BLE FTMS (Indoor Rower Data, two 12-byte
   packets). Start, Stop, Pause, and Reset from an app act on the session.
 - Saves each session to the SD card as `/sessions/<date>_<time>.tcx`.
+- Installs from the browser: see [Install](#install).
 
 See [Hardware.md](Hardware.md) for sensor wiring, board pinouts, and the
 physics model's derivation/attribution. See
 [firmware/README.md](firmware/README.md) for the firmware source layout.
+
+## Install
+
+No tools needed: flash the board from the browser at
+**[mybesttools.github.io/Rowing_Display](https://mybesttools.github.io/Rowing_Display/)**.
+
+[![The web installer](assets/github_pages_flash.png)](https://mybesttools.github.io/Rowing_Display/)
+
+1. Open the page in Chrome or Edge on a desktop computer (Web Serial; Safari
+   and Firefox can't flash).
+2. Connect the board with a USB-C data cable.
+3. Pick the display (5" or 7") and the machine (Kuipers or Dunlop), click
+   **Install firmware** and choose the serial port.
+4. When asked, don't erase to keep your settings; erase to start from the
+   machine preset. Flashing takes about a minute and the board restarts.
+
+The machine choice only sets the first-boot preset; it can be changed under
+Settings on the device. The page always serves the latest release. Each
+[GitHub release](https://github.com/mybesttools/Rowing_Display/releases) also
+has the four merged images (`rowing-display-<version>-<env>.bin`) for
+`esptool.py --chip esp32s3 write_flash 0x0 <image>.bin`.
 
 ## Build
 
@@ -59,7 +88,7 @@ pio run -e esp32-s3-lcd5-kuipers        # 5" board, first boot on the Kuipers pr
 pio run -e <env> -t upload              # flash
 pio test -e native-test                 # run the metrics-model unit tests
 
-# pull the on-device pulse log after a session
+# pull the on-device pulse logs (the newest 7 boots that saw rowing)
 ~/.platformio/penv/bin/python scripts/fetch_pulse_log.py --port /dev/cu.usbmodemXXXX
 
 # set the clock used for session files (once on the 5" board: it has an RTC)
@@ -69,36 +98,42 @@ pio test -e native-test                 # run the metrics-model unit tests
 ~/.platformio/penv/bin/python scripts/sim_row.py --port /dev/cu.usbmodemXXXX --strokes 20
 ```
 
-## Installing and updating
+## Updates over Wi-Fi
 
-No toolchain needed: the web installer at
-<https://mybesttools.github.io/Rowing_Display/> flashes a display connected
-over USB, from Chrome or Edge (ESP Web Tools). Pick the board and machine,
-press **Connect and install**, and leave **Erase device** off to keep the
-settings.
-
-After that, updates come over Wi-Fi. Each clock sync (weekly, at start-up
-when one is due, or SYNC under Settings) also reads
-`firmware/latest.json` from that site and, when it names a newer version,
-downloads and installs it behind the splash screen and restarts. A new
-version that crashes before its screens are up is rolled back on the next
-start. Local builds (version = a commit hash from `git describe`) never
-update themselves; the splash screen shows the running version.
-
-Releasing: push a tag such as `v1.2.0`. `.github/workflows/release.yml`
-builds all four environments, attaches the binaries to a GitHub Release
-and publishes the installer and update files to GitHub Pages (one-time:
-Settings > Pages > Source: GitHub Actions). To try the site locally:
-
-```bash
-for e in esp32-s3-devkitc-1 esp32-s3-lcd5; do FIRMWARE_VERSION=0.0.1 pio run -e $e; done
-python3 scripts/build_site.py --version 0.0.1 --out site esp32-s3-devkitc-1 esp32-s3-lcd5
-python3 -m http.server -d site 8000   # http://localhost:8000 (Web Serial works on localhost)
-```
+Once installed, updates come over Wi-Fi. Each clock sync (weekly, at
+start-up when one is due, or SYNC under Settings) also reads
+`firmware/latest.json` from the installer site and, when it names a newer
+version, downloads and installs it behind the splash screen and restarts. A
+new version that crashes before its screens are up is rolled back on the
+next start. Only release builds update themselves: a local build (version
+with `+<commit>`, see [Versioning](#versioning)) never does.
 
 Each session is saved to the SD card as `/sessions/<date>_<time>.tcx` when
 it ends; upload it to Strava, Intervals.icu or Garmin Connect and set the
 activity type to rowing.
+
+## Versioning
+
+Releases follow [semantic versioning](https://semver.org/). The number is in
+[`VERSION`](VERSION); [`CHANGELOG.md`](CHANGELOG.md) lists what changed.
+
+Each build is stamped by `scripts/firmware_version.py`. A build of the commit
+tagged `v<VERSION>` with no local changes reports just the number, e.g.
+`1.0.0`. Any other build adds the commit and `.dirty` for uncommitted changes,
+e.g. `1.0.0+f920599.dirty`. The version shows in the bottom-right corner of
+the splash and home screens, in the boot log, and to Bluetooth apps as the
+Device Information firmware revision.
+
+To release: set `VERSION`, move the `Unreleased` notes in `CHANGELOG.md`
+under the new number, commit, then `git tag v<VERSION>` and push the tag.
+The tag runs `.github/workflows/release.yml`: it builds all four
+board/machine variants, creates the GitHub release (notes from the
+`CHANGELOG.md` section, merged images attached) and publishes the browser
+installer and the over-the-air update files to GitHub Pages.
+`scripts/build_web_installer.py` does the same
+build locally into `.pio/web-installer/`; serve that folder
+(`python3 -m http.server -d .pio/web-installer`) and open it in Chrome to
+test the page.
 
 ## Backgrounds
 
