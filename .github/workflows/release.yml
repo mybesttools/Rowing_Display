@@ -1,0 +1,68 @@
+# Builds every board/machine variant for a version tag (v1.2.0), attaches the
+# binaries to a GitHub Release, and publishes the GitHub Pages site: the web
+# installer plus firmware/latest.json, which the displays check for updates
+# when they sync their clock (firmware/src/firmware_update.h).
+#
+# One-time setup: Settings > Pages > Source: "GitHub Actions".
+name: Release
+
+on:
+  push:
+    tags: ["v*.*.*"]
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+env:
+  ENVS: esp32-s3-devkitc-1 esp32-s3-devkitc-1-kuipers esp32-s3-lcd5 esp32-s3-lcd5-kuipers
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.platformio
+            ~/.cache/pip
+          key: pio-${{ runner.os }}-${{ hashFiles('platformio.ini') }}
+      - name: Install PlatformIO
+        run: pip install platformio
+      - name: Unit tests
+        run: pio test -e native-test
+      - name: Build
+        run: |
+          export FIRMWARE_VERSION="${GITHUB_REF_NAME#v}"
+          for e in $ENVS; do pio run -e "$e"; done
+      - name: Assemble site
+        run: python3 scripts/build_site.py --version "${GITHUB_REF_NAME#v}" --out site $ENVS
+      - name: Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir release
+          for e in $ENVS; do cp "site/firmware/$e/firmware.bin" "release/$e.bin"; done
+          gh release create "$GITHUB_REF_NAME" release/*.bin --title "$GITHUB_REF_NAME" --generate-notes
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

@@ -13,3 +13,6 @@ compile_commands.json
 sd_card/
 background_previews/
 __pycache__/
+
+# Assembled GitHub Pages site (scripts/build_site.py)
+site/

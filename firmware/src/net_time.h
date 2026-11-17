@@ -1,14 +1,16 @@
 #pragma once
 
-// Clock sync over Wi-Fi. Each job runs on its own task and turns Wi-Fi off
+// Clock sync over Wi-Fi, followed by a check for a firmware update
+// (firmware_update.h). Each job runs on its own task and turns Wi-Fi off
 // when it's done: the radio stays off the rest of the time, since RF and
 // flash activity are what disturb the RGB panel (see panel_runtime.h). One
 // job at a time; a start call while busy is ignored.
 namespace net_time {
 
-enum class State { Idle, Scanning, ScanDone, Connecting, Syncing, Synced, Failed };
+enum class State { Idle, Scanning, ScanDone, Connecting, Syncing, Updating, Synced, UpdateInstalled, Failed };
 
-// Connect, get the time from NTP, write it to the RTC, disconnect.
+// Connect, get the time from NTP, write it to the RTC, install a newer
+// firmware if there is one, disconnect. UpdateInstalled: restart to run it.
 // `posixTz` is the time zone (timezones.h) to keep in effect.
 void startSync(const char* ssid, const char* password, const char* posixTz);
 

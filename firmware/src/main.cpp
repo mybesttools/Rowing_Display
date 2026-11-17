@@ -7,6 +7,7 @@
 
 #include "ble_ftms.h"
 #include "config.h"
+#include "firmware_update.h"
 #include "metrics_model.h"
 #include "net_time.h"
 #include "panel_runtime.h"
@@ -75,10 +76,21 @@ void applySettings(const settings::Settings& s) {
            settings::sensorName(s.sensor), s.background, s.paceBoatOn ? "on" : "off", s.paceBoatSplitSec);
 }
 
-// Runs a Wi-Fi clock sync to the end with the splash screen up, showing its
-// progress. Blocking (a few seconds, up to ~40 s when the network is
-// unreachable): Wi-Fi and the RGB panel's PSRAM traffic disturb each other,
-// so nothing else should be drawing meanwhile. Never called mid-session.
+// "Clock: synced 10:02" / "Update: installing 1.2.0: 40%"
+void showSyncStatus(const char* status) {
+    const net_time::State st = net_time::state();
+    const bool update = st == net_time::State::Updating || st == net_time::State::UpdateInstalled;
+    char line[64];
+    snprintf(line, sizeof(line), "%s: %s", update ? "Update" : "Clock", status);
+    panel_runtime::setSplashStatus(line);
+}
+
+// Runs a Wi-Fi clock sync, and the firmware update check that follows it, to
+// the end with the splash screen up, showing its progress. Blocking (a few
+// seconds, up to ~40 s when the network is unreachable, a minute or two to
+// install an update): Wi-Fi and the RGB panel's PSRAM traffic disturb each
+// other, so nothing else should be drawing meanwhile. Restarts when an
+// update was installed. Never called mid-session.
 void syncClock(const settings::Settings& s, bool returnToScreen) {
     if (s.wifiSsid[0] == '\0' || net_time::busy()) {
         return;
@@ -90,16 +102,15 @@ void syncClock(const settings::Settings& s, bool returnToScreen) {
     while (net_time::busy()) {
         if (strcmp(shown, net_time::statusText()) != 0) {
             snprintf(shown, sizeof(shown), "%s", net_time::statusText());
-            char line[64];
-            snprintf(line, sizeof(line), "Clock: %s", shown);
-            panel_runtime::setSplashStatus(line);
+            showSyncStatus(shown);
         }
         delay(50);
     }
-    char line[64];
-    snprintf(line, sizeof(line), "Clock: %s", net_time::statusText());
-    panel_runtime::setSplashStatus(line);
+    showSyncStatus(net_time::statusText());
     delay(1200); // long enough to read the result
+    if (net_time::state() == net_time::State::UpdateInstalled) {
+        esp_restart();
+    }
     if (returnToScreen) {
         panel_runtime::hideSplash();
     }
@@ -245,6 +256,7 @@ void setup() {
     Serial.begin(cfg::SERIAL_BAUD);
 
     waveshare7::logBoardProfile();
+    printf("firmware %s (%s)\n", firmware_update::version(), firmware_update::variant());
 
     pulse_log::begin();
     pulse_log::printf("B,%lu\n", static_cast<unsigned long>(millis()));
@@ -273,6 +285,7 @@ void setup() {
 
     panel_runtime::setSplashStatus("Preparing the scene...");
     panel_runtime::buildScreens();
+    firmware_update::markBootOk();
 
     printf("Rowing display starter scaffold ready\n");
 }

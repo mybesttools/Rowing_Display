@@ -69,6 +69,33 @@ pio test -e native-test                 # run the metrics-model unit tests
 ~/.platformio/penv/bin/python scripts/sim_row.py --port /dev/cu.usbmodemXXXX --strokes 20
 ```
 
+## Installing and updating
+
+No toolchain needed: the web installer at
+<https://mybesttools.github.io/Rowing_Display/> flashes a display connected
+over USB, from Chrome or Edge (ESP Web Tools). Pick the board and machine,
+press **Connect and install**, and leave **Erase device** off to keep the
+settings.
+
+After that, updates come over Wi-Fi. Each clock sync (weekly, at start-up
+when one is due, or SYNC under Settings) also reads
+`firmware/latest.json` from that site and, when it names a newer version,
+downloads and installs it behind the splash screen and restarts. A new
+version that crashes before its screens are up is rolled back on the next
+start. Local builds (version = a commit hash from `git describe`) never
+update themselves; the splash screen shows the running version.
+
+Releasing: push a tag such as `v1.2.0`. `.github/workflows/release.yml`
+builds all four environments, attaches the binaries to a GitHub Release
+and publishes the installer and update files to GitHub Pages (one-time:
+Settings > Pages > Source: GitHub Actions). To try the site locally:
+
+```bash
+for e in esp32-s3-devkitc-1 esp32-s3-lcd5; do FIRMWARE_VERSION=0.0.1 pio run -e $e; done
+python3 scripts/build_site.py --version 0.0.1 --out site esp32-s3-devkitc-1 esp32-s3-lcd5
+python3 -m http.server -d site 8000   # http://localhost:8000 (Web Serial works on localhost)
+```
+
 Each session is saved to the SD card as `/sessions/<date>_<time>.tcx` when
 it ends; upload it to Strava, Intervals.icu or Garmin Connect and set the
 activity type to rowing.

@@ -116,6 +116,8 @@ The plan is the same part on both rowers. On the Dunlop the fan cage is open: a 
 
 The 5" input can take the Hall once those are settled. `DI1` is an opto: the reed's job is to connect `DI1` to `GND` and light the LED. An **open-drain** Hall output does that same connection (`OUT` to `DI1`, `GND` to `GND`). A push-pull output drives `DI1` high and can leave the LED half-lit, so it is the wrong kind. Power comes from the terminal's `VOUT` pin, which ships at 3.3 V (the I2C-header supply; a resistor on the board selects 5 V instead). A classic A3144 needs about 4.5 V, so it does not run from `VOUT` as the board sits. Use a 3.3 V open-drain part. The LED current is set by the 220 Ω and 3.6 kΩ resistors in series with it, and a small Hall switch can sink that.
 
+**Tested 2026-11-14 on the 5" board:** an HW-477 module (A3144 + pull-up + LED, pins `S` / VCC / `-`) works on `DI1` when VCC comes from an external 5 V with its ground tied to the board `GND`. It does nothing from the 3.3 V `VOUT`. The A3144 is unipolar, so the magnet's pole matters; the module LED lights when it switches.
+
 The 7" header is `3V3` / `GND` / GPIO6 with the pin pulled up, and the firmware counts an active-low edge. The same 3.3 V open-drain part works there. The Hall preset in Settings is a 2 ms debounce; pulse mode stays "wheel turns" and pulses per turn stays 1 until a logged session says otherwise. No firmware change is required for the experiment.
 
 ### Mounting notes (750 fan housing)

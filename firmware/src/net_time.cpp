@@ -10,6 +10,7 @@
 #include "esp_heap_caps.h"
 #include "esp_netif.h"
 #include "esp_sntp.h"
+#include "firmware_update.h"
 #include "panel_runtime.h"
 #include "rtc_clock.h"
 
@@ -220,8 +221,8 @@ void sync() {
         ok = sntp_get_sync_status() == SNTP_SYNC_STATUS_COMPLETED;
     }
     esp_sntp_stop();
-    radioOff();
     if (!ok) {
+        radioOff();
         setStatus(State::Failed, "no answer from time server");
         return;
     }
@@ -231,6 +232,18 @@ void sync() {
     localtime_r(&now, &local);
     char text[48];
     strftime(text, sizeof(text), "synced %H:%M", &local);
+
+    // While the radio is on and the clock is right (HTTPS needs it).
+    const firmware_update::Result update =
+        firmware_update::checkAndInstall([](const char* status) { setStatus(State::Updating, status); });
+    radioOff();
+    if (update == firmware_update::Result::Installed) {
+        g_state = State::UpdateInstalled; // the text stays "installed 1.2.0, restarting"
+        return;
+    }
+    if (update == firmware_update::Result::Failed) {
+        strncat(text, ", update failed", sizeof(text) - strlen(text) - 1);
+    }
     setStatus(State::Synced, text);
 }
 
@@ -246,8 +259,9 @@ void task(void*) {
 // Callers check busy() and set the state before calling this.
 bool startJob() {
     WiFi.persistent(false); // credentials live in our settings, not Wi-Fi's own NVS
-    // Core 0 with the sensor poll task, below its priority (5).
-    if (xTaskCreatePinnedToCore(task, "net_time", 6144, nullptr, 2, nullptr, 0) == pdPASS) {
+    // Core 0 with the sensor poll task, below its priority (5). The TLS
+    // handshake of the update check needs the larger stack.
+    if (xTaskCreatePinnedToCore(task, "net_time", 10240, nullptr, 2, nullptr, 0) == pdPASS) {
         return true;
     }
     printf("wifi: task create failed; internal heap free %u, largest block %u\n",
@@ -301,7 +315,7 @@ State state() {
 
 bool busy() {
     const State s = g_state;
-    return s == State::Scanning || s == State::Connecting || s == State::Syncing;
+    return s == State::Scanning || s == State::Connecting || s == State::Syncing || s == State::Updating;
 }
 
 const char* statusText() {

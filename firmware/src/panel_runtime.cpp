@@ -54,6 +54,7 @@ void resyncDisplay() {}
 #include "esp_heap_caps.h"
 #include "esp_lcd_panel_rgb.h"
 #include "esp_lv_adapter_arduino.h"
+#include "firmware_update.h"
 #include "pace_boat.h"
 #include "rtc_clock.h"
 #include "rower_scene.h"
@@ -418,6 +419,13 @@ void buildSplashScreen() {
     lv_obj_set_style_text_color(g_splashStatus, kColorHint, 0);
     lv_obj_set_style_text_font(g_splashStatus, &lv_font_montserrat_24, 0);
     lv_label_set_text(g_splashStatus, "Starting...");
+
+    lv_obj_t* version = lv_label_create(g_splashScreen);
+    lv_obj_add_flag(version, LV_OBJ_FLAG_IGNORE_LAYOUT);
+    lv_label_set_text_fmt(version, "v%s", firmware_update::version());
+    lv_obj_set_style_text_color(version, kColorHint, 0);
+    lv_obj_set_style_text_font(version, &lv_font_montserrat_14, 0);
+    lv_obj_align(version, LV_ALIGN_BOTTOM_MID, 0, -16);
 }
 
 void buildHomeScreen() {
