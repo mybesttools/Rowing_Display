@@ -6,6 +6,8 @@ version string.
 
 ## Unreleased
 
+## 1.2.2 — 2026-11-17
+
 - Updates over Wi-Fi: each clock sync checks the installer site for a
   newer release and installs it; a version that fails to start is rolled
   back. Release builds only.
